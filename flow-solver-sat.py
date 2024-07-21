@@ -125,7 +125,7 @@ class PuzzleRect(Puzzle):
         self.rows = len(puzzle_grid)
         self.cols = len(puzzle_grid[0])
         self.n_cells = self.rows * self.cols
-        self.edge_var_offset = self.n_cells * (self.n_colors+1) + 1
+        self.edge_var_offset = self.n_cells * (self.n_colors+1) + 1 # self.n_colors+1 since colors are 1-indexed
 
     def __repr__(self) -> str:
         return self.to_str(self.state)
@@ -142,8 +142,7 @@ class PuzzleRect(Puzzle):
 
     def var_edge(self, r1: int, c1: int, r2: int, c2: int, clr: int) -> int:
         '''Create a uniquely identifiable SAT variable, as an int, which represents
-        "the edge between the cell/vertex at row `r1` and column `c1` and the cell/vertex at (`r2`, `c2`) is `clr`".
-        if `clr` is `0`, then the edge does not connect the cells/vertices.'''
+        "the edge between the cell/vertex at row `r1` and column `c1` and the cell/vertex at (`r2`, `c2`) is `clr`".'''
 
         # enforce deterministic edge variable regardless of order of the 2 vertices.
         # (r2,c2) will always be down/right of (r1,c1)
@@ -171,12 +170,10 @@ class PuzzleRect(Puzzle):
         '''Find the row and column of endpoint vertices, color, and parity corresponding to a numeric edge variable.'''
         
         if var < self.edge_var_offset: raise ValueError("Variable does not correspond to an edge.")
-
-        n_edge_states = self.n_colors + 1
         
         var -= self.edge_var_offset
-        edge_index = var // n_edge_states
-        clr = var % n_edge_states
+        edge_index = var // (self.n_colors+1)
+        clr = var % (self.n_colors+1)
         endpoint = edge_index // 2
         is_horizontal = edge_index % 2 == 1
         
@@ -210,8 +207,6 @@ class PuzzleRect(Puzzle):
         return [(dir, r+dr, c+dc) for (dir, dr, dc) in self.directions if self.valid_cell(r+dr, c+dc)]
 
     def create_vertex_clauses(self, print_clauses=False) -> List[Clause]:
-        '''Create CNF clauses which dictate that each cell/vertex is exactly one color.'''
-        
         clauses = []
         for r, c, cell in self.iter_puzzle():
             new_clauses = []
@@ -275,12 +270,12 @@ class PuzzleRect(Puzzle):
         eset = set()
         for r, c, _ in self.iter_puzzle():
             for _, nr, nc in self.neighbors(r, c):
-                for clr in range(self.n_colors+1):
+                for clr in self.iter_colors():
                     evar = self.var_edge(r,c,nr,nc,clr)
                     if evar in eset: continue
                     eset.add(evar)
                     if print_clauses: print(r, c, nr, nc, clr, evar, self._parse_var_edge(evar, as_str=True))
-        print(f"edge size:{len(eset)} / expected:{((self.rows-1)*self.cols + (self.cols-1)*self.rows) * (self.n_colors+1)}")
+        print(f"edge size:{len(eset)} / expected:{((self.rows-1)*self.cols + (self.cols-1)*self.rows) * self.n_colors}")
 
 
 
