@@ -14,6 +14,7 @@ import itertools
 T = TypeVar('T')
 Grid = List[List[T]]
 Clause = List[int]
+PuzzleState = Grid | Any
 
 class Timestamp:
     '''Record labeled timestamps.'''
@@ -36,10 +37,20 @@ class Timestamp:
 
 class Puzzle(ABC):
     '''Puzzle information and SAT reducer.'''
-    state: Any
+    state: PuzzleState
     n_colors: int
-    def __init__(self, type: str) -> None:
-        self.type = type
+    def __init__(self, source: str | PuzzleState) -> None:
+        if isinstance(source, str):
+            self.state = self.read_puzzle(source)
+        elif isinstance(source, PuzzleState):
+            self.state = source
+        else:
+            raise TypeError("Source must be the file name of a .txt file or a valid puzzle representation.")
+
+    @staticmethod
+    def _cell_is_empty(char: str) -> bool:
+        '''Check whether a char represents an empty cell.'''
+        return char in ['.',' ']
 
     @staticmethod
     def no_two(vars: List[int]) -> List[Clause]:
@@ -88,6 +99,12 @@ class Puzzle(ABC):
         return clauses
 
     @abstractmethod
+    def read_puzzle(self, puzzle_txt: str) -> PuzzleState:
+        '''Convert a puzzle from a .txt file to a numerical representation.
+        Unique numbers represent the same color; 0 represents an open cell.
+        Assumes puzzle validity.  Returns the puzzle as an object.'''
+
+    @abstractmethod
     def to_str(self, puzzle_state: Any) -> str:
         '''Represent the puzzle state as a string.'''
 
@@ -132,8 +149,8 @@ class Puzzle(ABC):
         '''Solve the puzzle and decode the solution.'''
 
     @abstractmethod
-    def _verify_clauses(self, print_clauses=False) -> None:
-        '''Print the clauses and verify there are the correct number.'''
+    def _verify_satvars(self, print_clauses=False) -> None:
+        '''Print the SAT variables and verify there are the correct number.'''
 
 class PuzzleRect(Puzzle):
     U = 0b0001
@@ -146,18 +163,35 @@ class PuzzleRect(Puzzle):
         (L, 0, -1),
         (R, 0, 1)
     ]
-    def __init__(self, puzzle_grid: Grid) -> None:
-        super().__init__('rect')
-        self.state: Grid = puzzle_grid
-        self.n_colors = max(max(row) for row in puzzle_grid)
-        self.rows = len(puzzle_grid)
-        self.cols = len(puzzle_grid[0])
+    def __init__(self, source: str | PuzzleState) -> None:
+        super().__init__(source)
+        self.n_colors = max(max(row) for row in self.state)
+        self.rows = len(self.state)
+        self.cols = len(self.state[0])
         self.n_cells = self.rows * self.cols
         self.edge_var_offset = self.n_cells * (self.n_colors+1) + 1 # self.n_colors+1 since colors are 1-indexed
 
     def __repr__(self) -> str:
         return self.to_str(self.state)
     
+    def read_puzzle(self, puzzle_txt: str) -> PuzzleState:
+        symbols = {}
+        puzzle_grid: Grid = []
+
+        with open(puzzle_txt, 'r') as file:
+            for row in file.readlines():
+                puzzle_row = []
+                for char in row.removesuffix('\n'):
+                    if Puzzle._cell_is_empty(char): # open cell
+                        puzzle_row.append(0)
+                    else:
+                        if char not in symbols:
+                            symbols[char] = len(symbols) + 1
+                        puzzle_row.append(symbols[char])
+                puzzle_grid.append(puzzle_row)
+        
+        return puzzle_grid
+
     def to_str(self, puzzle_state: Grid, alpha=False) -> str:
         if alpha:
             return '\n'.join(' '.join(f"{chr(ord('a') + cell-1)}" if cell > 0 else "-"
@@ -314,7 +348,7 @@ class PuzzleRect(Puzzle):
             print(f"number of clauses: {len(clauses):,}")
             print(ts.to_str())
 
-    def _verify_clauses(self, print_clauses=False) -> None:
+    def _verify_satvars(self, print_clauses=False) -> None:
         vset = set()
         for r, c, _ in self.iter_vertex():
             for clr in self.iter_colors():
@@ -332,43 +366,7 @@ class PuzzleRect(Puzzle):
                 if print_clauses: print(r, c, nr, nc, evar, self._parse_var_edge(evar, as_str=True))
         print(f"edge size:{len(eset)} / expected:{(self.rows-1)*self.cols + (self.cols-1)*self.rows}")
 
-
-
-
-
-
-
-def read_puzzle(puzzle_txt: str, ptype='rect') -> Puzzle:
-    '''Convert a puzzle from a .txt file to a numerical representation.
-    Unique numbers represent the same color; 0 represents an open cell.
-    Assumes puzzle validity.  Returns the puzzle as an object.'''
-
-    symbols = {}
-    puzzle: Puzzle
-
-    with open(puzzle_txt, 'r') as file:
-        if ptype == 'rect':
-            puzzle_grid = []
-            for row in file.readlines():
-                puzzle_row = []
-                for char in row.removesuffix('\n'):
-                    if char in ['.',' ']: # open cell
-                        puzzle_row.append(0)
-                    else:
-                        if char not in symbols:
-                            symbols[char] = len(symbols) + 1
-                        puzzle_row.append(symbols[char])
-                puzzle_grid.append(puzzle_row)
-
-            puzzle = PuzzleRect(puzzle_grid)
-        
-        return puzzle
-    
-puzzle = read_puzzle('puzzle.txt')
-
+puzzle = PuzzleRect('puzzle.txt')
 print(puzzle)
-# puzzle.solve_puzzle(print_soln=True, verbose=True)
+puzzle.solve_puzzle(print_soln=True, verbose=True)
 # puzzle._verify_clauses(print_clauses=True)
-
-# print(Puzzle.exactly_two([1,2]))
-# print(Puzzle.exactly_two([1,2,3]))
