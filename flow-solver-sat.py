@@ -5,6 +5,7 @@ More info on the Glucose solver: https://github.com/audemard/glucose
 '''
 
 import sys
+import time
 from pysat.solvers import Glucose42
 from typing import TypeVar, Any, List, Dict, Tuple, Generator
 from abc import ABC, abstractmethod
@@ -13,6 +14,25 @@ import itertools
 T = TypeVar('T')
 Grid = List[List[T]]
 Clause = List[int]
+
+class Timestamp:
+    '''Record labeled timestamps.'''
+    def __init__(self) -> None:
+        self.ts = []
+        self.start = time.time()
+        self.prev = self.start
+
+    def add(self, name: str) -> None:
+        '''Add a timestamp with the given name.'''
+        now = time.time()
+        self.ts.append((name, now - self.prev))
+        self.prev = now
+
+    def to_str(self) -> str:
+        max_name_length = max(len(name) for name,_ in self.ts)
+        formatted_ts = [f"{name.rjust(max_name_length)}: {t:.4f} s" for name,t in self.ts]
+        formatted_ts.append(f"{'total'.rjust(max_name_length)}: {sum(t for _,t in self.ts):.4f} s")
+        return '\n'.join(formatted_ts)
 
 class Puzzle(ABC):
     '''Puzzle information and SAT reducer.'''
@@ -24,11 +44,13 @@ class Puzzle(ABC):
     @staticmethod
     def no_two(vars: List[int]) -> List[Clause]:
         '''Generate CNF clauses which dictate that no two (at most one) of the given variables are true.'''
+        assert len(vars) > 1
         return ([-a, -b] for a, b in itertools.combinations(vars, 2))
     
     @staticmethod
     def exactly_one(vars: List[int]) -> List[Clause]:
         '''Generate CNF clauses which dictates that exactly one of the given variables are true.'''
+        assert len(vars) > 0
         clauses = [vars] # at least 1 is true
         clauses.extend(Puzzle.no_two(vars)) # at most 1 is true / no 2 are true
         return clauses
@@ -54,6 +76,17 @@ class Puzzle(ABC):
 
         return clauses
 
+    @staticmethod
+    def same_parity(vars: List[int], exceptions: List[int] = []) -> List[Clause]:
+        '''Generate CNF clauses which dictate that the variables in `vars` must all have the same parity,
+        except when any of the literals in `exceptions` are true (variables can be true or false in exception conditions).'''
+        assert len(vars) > 1
+        clauses = []
+        for (var1, var2) in itertools.combinations(vars, 2):
+            clauses.append([-var1, var2] + exceptions) # var1      OR NOT var2  OR exceptions
+            clauses.append([var1, -var2] + exceptions) # NOT var1  OR var2      OR exceptions
+        return clauses
+
     @abstractmethod
     def to_str(self, puzzle_state: Any) -> str:
         '''Represent the puzzle state as a string.'''
@@ -69,19 +102,14 @@ class Puzzle(ABC):
         which represents an edge being a certain color (or none).'''
 
     @abstractmethod
-    def create_vertex_clauses(self, *args, **kwargs) -> List[Clause]:
-        '''Create clauses for vertices/cells.  These clauses generally represent:
+    def create_clauses(self, *args, **kwargs) -> List[Clause]:
+        '''Create clauses for vertices and edges.  These clauses generally represent:
         - terminal cells are their original color and at most this one color
         - terminal cells have exactly one neighbor with the same color
         - empty/pipe cells are exactly one color
-        '''
-
-    @abstractmethod
-    def create_edge_clauses(self, *args, **kwargs) -> List[Clause]:
-        '''Create clauses for edges, which represent relations between neighbor vertices/cells.
-        These clauses generally represent:
         - empty/pipe cells which are connected have the same color
-        - empty/pipe cells neighbor exactly two other cells of the same color'''
+        - empty/pipe cells neighbor exactly two other cells of the same color
+        '''
 
     @staticmethod
     def solve_sat(clauses: List[Clause]) -> List[int]:
@@ -100,7 +128,7 @@ class Puzzle(ABC):
         '''Convert SAT solution variables into a readable form.'''
 
     @abstractmethod
-    def solve_puzzle(self) -> None:
+    def solve_puzzle(self, print_soln=False, verbose=False) -> None:
         '''Solve the puzzle and decode the solution.'''
 
     @abstractmethod
@@ -130,7 +158,11 @@ class PuzzleRect(Puzzle):
     def __repr__(self) -> str:
         return self.to_str(self.state)
     
-    def to_str(self, puzzle_state: Grid) -> str:
+    def to_str(self, puzzle_state: Grid, alpha=False) -> str:
+        if alpha:
+            return '\n'.join(' '.join(f"{chr(ord('a') + cell-1)}" if cell > 0 else "-"
+                                      for cell in row) for row in puzzle_state)
+
         max_length = max(len(str(cell)) for row in puzzle_state for cell in row)
         return '\n'.join(' '.join(f"{cell:0{max_length}d}" if cell > 0 else "-"*max_length
                                   for cell in row) for row in puzzle_state)
@@ -140,18 +172,19 @@ class PuzzleRect(Puzzle):
         "the cell/vertex at row `r` and column `c` is `clr`".'''
         return (clr * self.cols + c) * self.rows + r
 
-    def var_edge(self, r1: int, c1: int, r2: int, c2: int, clr: int) -> int:
+    def var_edge(self, r1: int, c1: int, r2: int, c2: int) -> int:
         '''Create a uniquely identifiable SAT variable, as an int, which represents
-        "the edge between the cell/vertex at row `r1` and column `c1` and the cell/vertex at (`r2`, `c2`) is `clr`".'''
+        "there exists an edge between the cell/vertex at row `r1` and column `c1`
+        and the cell/vertex at row `r2` and column `c2`".'''
 
         # enforce deterministic edge variable regardless of order of the 2 vertices.
         # (r2,c2) will always be down/right of (r1,c1)
         if r1 * self.cols + c1 > r2 * self.cols + c2: r1, c1, r2, c2 = r2, c2, r1, c1
 
         edge_index = 2 * (r1 * self.cols + c1) # identify with the up/left endpoint cell/vertex
-        if c2-c1 == 1: edge_index += 1 # up-down edge
+        if c2-c1 == 1: edge_index += 1 # up-down/vertical edge
 
-        return self.edge_var_offset + edge_index * (self.n_colors+1) + clr
+        return self.edge_var_offset + edge_index
     
     def _parse_var_vertex(self, var: int, as_str=False) -> Tuple[int, int, int, bool] | str:
         '''Find the row, column, color, and parity corresponding to a numeric vertex variable.'''
@@ -166,14 +199,12 @@ class PuzzleRect(Puzzle):
         if not as_str: return r, c, clr, var > 0
         return f"({r},{c}):{clr}" if var > 0 else f"NOT({r},{c}):{clr}"
     
-    def _parse_var_edge(self, var: int, as_str=False) -> Tuple[int, int, int, int, int, bool] | str:
-        '''Find the row and column of endpoint vertices, color, and parity corresponding to a numeric edge variable.'''
+    def _parse_var_edge(self, var: int, as_str=False) -> Tuple[int, int, int, int, bool] | str:
+        '''Find the row and column of endpoint vertices, and parity corresponding to a numeric edge variable.'''
         
         if var < self.edge_var_offset: raise ValueError("Variable does not correspond to an edge.")
         
-        var -= self.edge_var_offset
-        edge_index = var // (self.n_colors+1)
-        clr = var % (self.n_colors+1)
+        edge_index = var - self.edge_var_offset
         endpoint = edge_index // 2
         is_horizontal = edge_index % 2 == 1
         
@@ -183,11 +214,11 @@ class PuzzleRect(Puzzle):
         if is_horizontal: r2, c2 = r1, c1 + 1
         else:             r2, c2 = r1 + 1, c1
         
-        if not as_str: return r1, c1, r2, c2, clr, var + self.edge_var_offset > 0
+        if not as_str: return r1, c1, r2, c2, var + self.edge_var_offset > 0
         
-        return f"({r1},{c1})-({r2},{c2}):{clr}" if var + self.edge_var_offset > 0 else f"NOT({r1},{c1})-({r2},{c2}):{clr}"
+        return f"({r1},{c1})-({r2},{c2})" if var + self.edge_var_offset > 0 else f"NOT({r1},{c1})-({r2},{c2})"
 
-    def iter_puzzle(self) -> Generator[Tuple[int, int, int], None, None]:
+    def iter_vertex(self) -> Generator[Tuple[int, int, int], None, None]:
         '''Iterate through row index, column index, and cell.'''
         for r, row in enumerate(self.state):
             for c, cell in enumerate(row):
@@ -206,24 +237,42 @@ class PuzzleRect(Puzzle):
         Each neighbor is represented as: (direction bit, row, column)'''
         return [(dir, r+dr, c+dc) for (dir, dr, dc) in self.directions if self.valid_cell(r+dr, c+dc)]
 
-    def create_vertex_clauses(self, print_clauses=False) -> List[Clause]:
+    def create_clauses(self, print_clauses=False) -> List[Clause]:
         clauses = []
-        for r, c, cell in self.iter_puzzle():
+        for r, c, cell in self.iter_vertex():
             new_clauses = []
-            if cell > 0: # terminal cell
-                # cell is this color
-                new_clauses.append([self.var_vertex(r, c, cell)])
-                # cell is at most one color
-                new_clauses.extend([-self.var_vertex(r, c, clr)] for clr in self.iter_colors() if clr != cell)
+            if cell > 0: # terminal vertex
+                # vertex is this color
+                new_clauses.append([self.var_vertex(r,c,cell)])
+                # vertex is at most one color
+                new_clauses.extend([-self.var_vertex(r,c,clr)] for clr in self.iter_colors() if clr != cell)
 
-                # exactly one neighbor cell is this color
-                neighbors_this_color = [self.var_vertex(nr, nc, cell) for dir, nr, nc in self.neighbors(r, c)]
+                # exactly one neighbor vertex is this color
+                neighbors_this_color = [self.var_vertex(nr,nc,cell) for dir,nr,nc in self.neighbors(r,c)]
                 new_clauses.extend(Puzzle.exactly_one(neighbors_this_color))
+
+                # don't need to consider incident edges, since it will be covered by pipe vertices
             
-            else: # empty cell, future pipe cell
-                # cell is exactly one color
-                cell_is_color = [self.var_vertex(r, c, clr) for clr in self.iter_colors()]
+            else: # empty vertex, future pipe vertex
+                # vertex is exactly one color
+                cell_is_color = [self.var_vertex(r,c,clr) for clr in self.iter_colors()]
                 new_clauses.extend(Puzzle.exactly_one(cell_is_color))
+
+                # exactly two incident edges exist
+                incident_edges = [self.var_edge(r,c,nr,nc) for dir,nr,nc in self.neighbors(r,c)]
+                new_clauses.extend(Puzzle.exactly_two(incident_edges))
+                
+                # some incident edge exists iff the cell and neighboring cell are the same color
+                for clr in self.iter_colors():
+                    cell_is_color = self.var_vertex(r,c,clr)
+                    for dir,nr,nc in self.neighbors(r,c):
+                        neighbor_is_color = self.var_vertex(nr,nc,clr)
+                        edge_var = self.var_edge(r,c,nr,nc)
+                        # cell and neighbor must be the same color, except if the edge does not exist
+                        new_clauses.extend(self.same_parity([cell_is_color, neighbor_is_color],
+                                                            exceptions=[-edge_var]))
+                        # if the edge does not exist, then cell and neighbor must be different colors
+                        new_clauses.append([edge_var, -cell_is_color, -neighbor_is_color])
 
             clauses.extend(new_clauses)
             if print_clauses:
@@ -233,9 +282,6 @@ class PuzzleRect(Puzzle):
         
         return clauses
     
-    def create_edge_clauses(self, print_clauses=False) -> List[Clause]:
-        pass
-    
     def parse_solution(self, soln: List[int]) -> Grid | None:
         if not soln:
             print("No solution")
@@ -244,23 +290,33 @@ class PuzzleRect(Puzzle):
         soln.insert(0, 0) # insert at index 0 so that SAT variables can index directly into their parity in the solution
         
         puzzle_soln = [[0]*self.cols for _ in range(self.rows)]
-        for r, c, _ in self.iter_puzzle():
+        for r, c, _ in self.iter_vertex():
             for clr in self.iter_colors():
                 if soln[self.var_vertex(r, c, clr)] > 0:
                     puzzle_soln[r][c] = clr
         
         return puzzle_soln
 
-    def solve_puzzle(self, print_soln=False) -> None:
-        clauses = self.create_vertex_clauses(print_clauses=False)
+    def solve_puzzle(self, verbose=False, print_soln=False) -> None:
+        ts = Timestamp()
+
+        clauses = self.create_clauses(print_clauses=False)
+        ts.add('create clauses')
 
         soln = Puzzle.solve_sat(clauses)
+        ts.add('solve clauses')
+
         puzzle_soln = self.parse_solution(soln)
-        if print_soln: print(self.to_str(puzzle_soln))
+        ts.add('parse solution')
+
+        if soln and print_soln: print(self.to_str(puzzle_soln, alpha=True))
+        if verbose:
+            print(f"number of clauses: {len(clauses):,}")
+            print(ts.to_str())
 
     def _verify_clauses(self, print_clauses=False) -> None:
         vset = set()
-        for r, c, _ in self.iter_puzzle():
+        for r, c, _ in self.iter_vertex():
             for clr in self.iter_colors():
                 vvar = self.var_vertex(r, c, clr)
                 vset.add(vvar)
@@ -268,14 +324,13 @@ class PuzzleRect(Puzzle):
         print(f"vertex size:{len(vset)} / expected:{self.n_cells * self.n_colors}")
 
         eset = set()
-        for r, c, _ in self.iter_puzzle():
+        for r, c, _ in self.iter_vertex():
             for _, nr, nc in self.neighbors(r, c):
-                for clr in self.iter_colors():
-                    evar = self.var_edge(r,c,nr,nc,clr)
-                    if evar in eset: continue
-                    eset.add(evar)
-                    if print_clauses: print(r, c, nr, nc, clr, evar, self._parse_var_edge(evar, as_str=True))
-        print(f"edge size:{len(eset)} / expected:{((self.rows-1)*self.cols + (self.cols-1)*self.rows) * self.n_colors}")
+                evar = self.var_edge(r,c,nr,nc)
+                if evar in eset: continue
+                eset.add(evar)
+                if print_clauses: print(r, c, nr, nc, evar, self._parse_var_edge(evar, as_str=True))
+        print(f"edge size:{len(eset)} / expected:{(self.rows-1)*self.cols + (self.cols-1)*self.rows}")
 
 
 
@@ -312,8 +367,8 @@ def read_puzzle(puzzle_txt: str, ptype='rect') -> Puzzle:
 puzzle = read_puzzle('puzzle.txt')
 
 print(puzzle)
-puzzle.solve_puzzle()
-puzzle._verify_clauses(print_clauses=True)
+# puzzle.solve_puzzle(print_soln=True, verbose=True)
+# puzzle._verify_clauses(print_clauses=True)
 
 # print(Puzzle.exactly_two([1,2]))
 # print(Puzzle.exactly_two([1,2,3]))
