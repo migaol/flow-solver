@@ -6,6 +6,7 @@ from PIL import Image
 import pyautogui as pag
 from typing import TypeVar, Any, List, Dict, Tuple
 from flowsolver_sat import Puzzle, PuzzleRect
+from utilities import Timestamp
 
 WindowLocation = Tuple[int, int, int, int] # x, y, width, height
 T = TypeVar('T')
