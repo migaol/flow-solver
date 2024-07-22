@@ -41,7 +41,7 @@ class Puzzle(ABC):
     n_colors: int
     def __init__(self, source: str | PuzzleState) -> None:
         if isinstance(source, str):
-            self.state = self.read_puzzle(source)
+            self.state = self.from_txt(source)
         elif isinstance(source, PuzzleState):
             self.state = source
         else:
@@ -99,9 +99,10 @@ class Puzzle(ABC):
         return clauses
 
     @abstractmethod
-    def read_puzzle(self, puzzle_txt: str) -> PuzzleState:
+    def from_txt(self, puzzle_txt: str) -> PuzzleState:
         '''Convert a puzzle from a .txt file to a numerical representation.
         Unique numbers represent the same color; 0 represents an open cell.
+        Additionally finds an arbitrary source for each color.
         Assumes puzzle validity.  Returns the puzzle as an object.'''
 
     @abstractmethod
@@ -175,19 +176,21 @@ class PuzzleRect(Puzzle):
     def __repr__(self) -> str:
         return self.to_str(self.state)
     
-    def read_puzzle(self, puzzle_txt: str) -> PuzzleState:
+    def from_txt(self, puzzle_txt: str) -> PuzzleState:
         symbols = {}
+        self.sources = {}
         puzzle_grid: Grid = []
 
         with open(puzzle_txt, 'r') as file:
-            for row in file.readlines():
+            for r,row in enumerate(file.readlines()):
                 puzzle_row = []
-                for char in row.removesuffix('\n'):
+                for c,char in enumerate(row.removesuffix('\n')):
                     if Puzzle._cell_is_empty(char): # open cell
                         puzzle_row.append(0)
                     else:
                         if char not in symbols:
                             symbols[char] = len(symbols) + 1
+                            self.sources[symbols[char]] = (r,c)
                         puzzle_row.append(symbols[char])
                 puzzle_grid.append(puzzle_row)
         
