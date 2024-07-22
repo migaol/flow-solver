@@ -140,7 +140,7 @@ class PuzzleRect(Puzzle):
     D = 0b0010
     L = 0b0100
     R = 0b1000
-    directions = [
+    DIRECTIONS = [
         (U, -1, 0),
         (D, 1, 0),
         (L, 0, -1),
@@ -270,7 +270,7 @@ class PuzzleRect(Puzzle):
     def neighbors(self, r: int, c: int) -> List[Tuple[int, int, int]]:
         '''Return a list of valid neighbors of the given cell coordinates.
         Each neighbor is represented as: (direction bit, row, column)'''
-        return [(dir, r+dr, c+dc) for (dir, dr, dc) in self.directions if self.valid_cell(r+dr, c+dc)]
+        return [(dir, r+dr, c+dc) for (dir, dr, dc) in self.DIRECTIONS if self.valid_cell(r+dr, c+dc)]
 
     def create_clauses(self, print_clauses=False) -> List[Clause]:
         clauses = []
@@ -379,7 +379,7 @@ class PuzzleRect(Puzzle):
             if print_clauses: print(r1, c1, r2, c2, evar, self._parse_var_edge(evar, as_str=True))
         print(f"edge size:{len(eset)} / expected:{(self.rows-1)*self.cols + (self.cols-1)*self.rows}")
 
-puzzle = PuzzleRect('puzzle.txt')
-print(puzzle)
-puzzle.solve_puzzle(print_soln=True, verbose=True)
+# puzzle = PuzzleRect('puzzle.txt')
+# print(puzzle)
+# puzzle.solve_puzzle(print_soln=True, verbose=True)
 # puzzle._verify_satvars(print_clauses=False)
