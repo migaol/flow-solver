@@ -153,6 +153,7 @@ class Puzzle(ABC):
         '''Print the SAT variables and verify there are the correct number.'''
 
 class PuzzleRect(Puzzle):
+    '''Puzzle class implementation for standard rectangular puzzles.'''
     U = 0b0001
     D = 0b0010
     L = 0b0100
@@ -252,11 +253,27 @@ class PuzzleRect(Puzzle):
         
         return f"({r1},{c1})-({r2},{c2})" if var + self.edge_var_offset > 0 else f"NOT({r1},{c1})-({r2},{c2})"
 
+    def _parse_var(self, var: int, as_str=False) -> Tuple | str:
+        '''Parse a vertex or edge variable.'''
+        parse_func = self._parse_var_vertex if var < self.edge_var_offset else self._parse_var_edge
+        return parse_func(var, as_str=as_str)
+
     def iter_vertex(self) -> Generator[Tuple[int, int, int], None, None]:
         '''Iterate through row index, column index, and cell.'''
         for r, row in enumerate(self.state):
             for c, cell in enumerate(row):
                 yield r, c, cell
+
+    def iter_edge(self) -> Generator[Tuple[int, int, int, int], None, None]:
+        '''Iterate through (r1,c1), (r2,c2) vertex combinations which represent edges.'''
+        # horizontal
+        for r, row in enumerate(self.state):
+            for c, _ in enumerate(row[:-1]):
+                yield r, c, r, c+1
+        # vertical
+        for r, row in enumerate(self.state[:-1]):
+            for c, _ in enumerate(row):
+                yield r, c, r+1, c
 
     def iter_colors(self) -> Generator[int, None, None]:
         '''Iterate over all unique numeric color identifiers in the puzzle.'''
@@ -273,8 +290,11 @@ class PuzzleRect(Puzzle):
 
     def create_clauses(self, print_clauses=False) -> List[Clause]:
         clauses = []
+
+        # vertex clauses
         for r, c, cell in self.iter_vertex():
             new_clauses = []
+
             if cell > 0: # terminal vertex
                 # vertex is this color
                 new_clauses.append([self.var_vertex(r,c,cell)])
@@ -295,24 +315,34 @@ class PuzzleRect(Puzzle):
                 # exactly two incident edges exist
                 incident_edges = [self.var_edge(r,c,nr,nc) for dir,nr,nc in self.neighbors(r,c)]
                 new_clauses.extend(Puzzle.exactly_two(incident_edges))
-                
-                # some incident edge exists iff the cell and neighboring cell are the same color
-                for clr in self.iter_colors():
-                    cell_is_color = self.var_vertex(r,c,clr)
-                    for dir,nr,nc in self.neighbors(r,c):
-                        neighbor_is_color = self.var_vertex(nr,nc,clr)
-                        edge_var = self.var_edge(r,c,nr,nc)
-                        # cell and neighbor must be the same color, except if the edge does not exist
-                        new_clauses.extend(self.same_parity([cell_is_color, neighbor_is_color],
-                                                            exceptions=[-edge_var]))
-                        # if the edge does not exist, then cell and neighbor must be different colors
-                        new_clauses.append([edge_var, -cell_is_color, -neighbor_is_color])
 
             clauses.extend(new_clauses)
             if print_clauses:
-                print(f"cell ({r},{c}) clauses:")
+                print(f"vertex ({r},{c}) clauses:")
                 for clause in new_clauses:
-                    print(clause, '; '.join(self._parse_var_vertex(var, as_str=True) for var in clause))
+                    print(clause, '; '.join(self._parse_var(var, as_str=True) for var in clause))
+
+        # edge clauses
+        for r1,c1,r2,c2 in self.iter_edge():
+            new_clauses = []
+
+            # some incident edge exists iff the cell and neighboring cell are the same color
+            edge_var = self.var_edge(r1,c1,r2,c2)
+            for clr in self.iter_colors():
+                cell_is_color = self.var_vertex(r1,c1,clr)
+                neighbor_is_color = self.var_vertex(r2,c2,clr)
+
+                # cell and neighbor must be the same color, except if the edge does not exist
+                new_clauses.extend(self.same_parity([cell_is_color, neighbor_is_color],
+                                                    exceptions=[-edge_var]))
+                # if the edge does not exist, then cell and neighbor must be different colors
+                new_clauses.append([edge_var, -cell_is_color, -neighbor_is_color])
+
+            clauses.extend(new_clauses)
+            if print_clauses:
+                print(f"edge ({r1},{c1})-({r2},{c2}) clauses:")
+                for clause in new_clauses:
+                    print(clause, '; '.join(self._parse_var(var, as_str=True) for var in clause))
         
         return clauses
     
@@ -352,21 +382,20 @@ class PuzzleRect(Puzzle):
         vset = set()
         for r, c, _ in self.iter_vertex():
             for clr in self.iter_colors():
-                vvar = self.var_vertex(r, c, clr)
+                vvar = self.var_vertex(r,c,clr)
                 vset.add(vvar)
                 if print_clauses: print(r, c, clr, vvar, self._parse_var_vertex(vvar, as_str=True))
         print(f"vertex size:{len(vset)} / expected:{self.n_cells * self.n_colors}")
 
         eset = set()
-        for r, c, _ in self.iter_vertex():
-            for _, nr, nc in self.neighbors(r, c):
-                evar = self.var_edge(r,c,nr,nc)
-                if evar in eset: continue
-                eset.add(evar)
-                if print_clauses: print(r, c, nr, nc, evar, self._parse_var_edge(evar, as_str=True))
+        for r1,c1,r2,c2 in self.iter_edge():
+            evar = self.var_edge(r1,c1,r2,c2)
+            if evar in eset: continue
+            eset.add(evar)
+            if print_clauses: print(r1, c1, r2, c2, evar, self._parse_var_edge(evar, as_str=True))
         print(f"edge size:{len(eset)} / expected:{(self.rows-1)*self.cols + (self.cols-1)*self.rows}")
 
 puzzle = PuzzleRect('puzzle.txt')
 print(puzzle)
 puzzle.solve_puzzle(print_soln=True, verbose=True)
-# puzzle._verify_clauses(print_clauses=True)
+# puzzle._verify_satvars(print_clauses=False)
