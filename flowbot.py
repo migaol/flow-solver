@@ -25,10 +25,12 @@ class FlowBot:
 
     def solve_puzzle(self, verbose=False) -> None:
         self.puzzle_img = FlowBot.screen_capture(self.window_location, save_png='puzzle.png' if verbose else False)
-        self.left_margin, self.top_margin, self.cell_size = self.get_puzzle_dims(self.puzzle_img)
+        self.find_lines(self.puzzle_img, self.W//2, verbose=verbose, show_img_process=verbose) #TODO move in get_puzzle_dims
+        self.left_margin, self.top_margin, self.grid_width, self.grid_height, self.cell_size = self.get_puzzle_dims(self.puzzle_img)
 
-        self.find_lines(self.puzzle_img, self.W//2, verbose=True)
-        # self.puzzle = PuzzleRect() #TODO
+        #TODO
+        # self.puzzle = PuzzleRect() # get puzzle
+
 
     def find_img(self, screen_gray: np.ndarray, img_file: str, screen_is_gray=True, verbose=False) -> WindowLocation | None:
         '''Find `img` on `screen`.  Match confidence coefficient is expected to be > 0.9
@@ -52,11 +54,11 @@ class FlowBot:
         x,y,w,h = loc
         cv2.rectangle(img, (x,y), (x+w,y+h), color, stroke)
 
-    def find_lines(self, img: Image.Image | np.ndarray, length: int, verbose=False) -> List[Line]:
+    def find_lines(self, img: Image.Image | np.ndarray, length: int, verbose=False, show_img_process=False) -> List[Line]:
         if isinstance(img, Image.Image): img = np.array(img)
         img_gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
-        img_edges = cv2.Canny(img_gray, threshold1=50, threshold2=200)
-        lines = cv2.HoughLinesP(img_edges, 1, theta=np.pi/180, threshold=50, minLineLength=length, maxLineGap=5)
+        img_edges = cv2.Canny(img_gray, threshold1=50, threshold2=100)
+        lines = cv2.HoughLinesP(img_edges, 1, theta=np.pi/180, threshold=10, minLineLength=length, maxLineGap=5)
 
         flows_counter_loc = self.find_img(img_gray, './assets/flows_counter.png', verbose=verbose)
         flows_counter_bottom = flows_counter_loc[1] + flows_counter_loc[3]
@@ -64,7 +66,7 @@ class FlowBot:
         hint_lines_loc = self.find_img(img_gray, './assets/hint_lines.png', verbose=verbose)
         hint_lines_top = hint_lines_loc[1]
 
-        cv2.imshow('edges', img_edges); cv2.waitKey(0)
+        if show_img_process: cv2.imshow('edges', img_edges); cv2.waitKey(0)
     
         hlines = []
         vlines = []
@@ -76,18 +78,21 @@ class FlowBot:
             elif abs(line_angle) > 89:
                 vlines.append(line[0])
 
-        img_lines = cv2.cvtColor(img_edges, cv2.COLOR_GRAY2BGR)
-        for line in hlines:
-            x1, y1, x2, y2 = line
-            cv2.line(img_lines, (x1, y1), (x2, y2), (0, 0, 255), 1)
-        for line in vlines:
-            x1, y1, x2, y2 = line
-            cv2.line(img_lines, (x1, y1), (x2, y2), (0, 255, 0), 1)
-        FlowBot._cv2_loc_rect(img_lines, flows_counter_loc, (255,0, 0))
-        FlowBot._cv2_loc_rect(img_lines, hint_lines_loc, (255,0, 0))
+        #TODO remove duplicates, false short lines
+
+        if show_img_process:
+            img_lines = cv2.cvtColor(img_edges, cv2.COLOR_GRAY2BGR)
+            for line in hlines: # red horizontal
+                x1, y1, x2, y2 = line
+                cv2.line(img_lines, (x1,y1), (x2,y2), (0,0,255), 1)
+            for line in vlines: # green vertical
+                x1, y1, x2, y2 = line
+                cv2.line(img_lines, (x1,y1), (x2,y2), (0,255,0), 1)
+            # blue recognized images
+            FlowBot._cv2_loc_rect(img_lines, flows_counter_loc, (255,0, 0))
+            FlowBot._cv2_loc_rect(img_lines, hint_lines_loc, (255,0, 0))
         
-        cv2.imwrite('lines.png', img_lines)
-        cv2.imshow('lines', img_lines); cv2.waitKey(0)
+            cv2.imshow('lines', img_lines); cv2.waitKey(0)
 
     @staticmethod
     def grid_to_txt(grid: Grid, txt_path: str) -> None:
@@ -141,11 +146,10 @@ class FlowBot:
         y = r * self.cell_size + self.cell_size//2 + self.Y + self.top_margin
         return (x, y)
     
-    #TODO
-    def get_grid(img: Image.Image, verbose=False) -> Grid:
+    def get_grid(img: Image.Image, grid_size: int, verbose=False) -> Grid:
         '''Find the grid of colors.'''
         img_width, _ = img.size
-        cell_size = img_width // grid_size # assume grid fills width
+        cell_size = img_width // grid_size # assume grid fills width TODO:change
         grid_rgbs = [[None]*grid_size for _ in range(grid_size)]
 
         for r in range(grid_size):
@@ -168,9 +172,10 @@ class FlowBot:
 
         return grid_colors
 
-    def get_puzzle_dims(self, puzzle_img: Image.Image) -> Tuple[int, int, int]:
-        '''Get left grid margin, top grid margin, and cell size.'''
-        return 0, 1, 2
+    def get_puzzle_dims(self, puzzle_img: Image.Image) -> Tuple[int, int, int, int, int]:
+        '''Get left grid margin, top grid margin, maximum horizontal cells (grid width),
+        maximum vertical cells (grid height), and cell size.'''
+        return 0, 1, 2, 3, 4
         # TODO
 
     def find_path(self, color_grid: Grid, source: Coord, color: int, verbose=False) -> List[Coord]:
