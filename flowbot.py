@@ -13,7 +13,7 @@ from utilities import Timestamp
 WindowLocation = Tuple[int, int, int, int] # x, y, width, height
 T = TypeVar('T')
 Grid = List[List[T]] # 2D array
-RGBt = Tuple[int, int, int] # red green blue
+RGBColor = Tuple[int, int, int] # red green blue
 Coord = Tuple[int, int] # 2D coordinate
 Line = Tuple[int, int, int, int] # x1, y1, x2, y2
 
@@ -24,41 +24,70 @@ class FlowBot:
         self.X, self.Y, self.W, self.H = self.window_location
 
     def solve_puzzle(self, verbose=False) -> None:
-        self.puzzle_img = FlowBot.screen_capture(self.window_location, save_png=verbose)
+        self.puzzle_img = FlowBot.screen_capture(self.window_location, save_png='puzzle.png' if verbose else False)
         self.left_margin, self.top_margin, self.cell_size = self.get_puzzle_dims(self.puzzle_img)
 
-        bot.find_lines(bot.puzzle_img, bot.W//2)
+        self.find_lines(self.puzzle_img, self.W//2, verbose=True)
         # self.puzzle = PuzzleRect() #TODO
+
+    def find_img(self, screen_gray: np.ndarray, img_file: str, screen_is_gray=True, verbose=False) -> WindowLocation | None:
+        '''Find `img` on `screen`.  Match confidence coefficient is expected to be > 0.9
+        (in practice, it is almost always close to perfect, 1.000).'''
+
+        if not screen_is_gray: screen_gray = cv2.cvtColor(screen_gray, cv2.COLOR_RGB2GRAY)
+        img_gray = cv2.imread(img_file, cv2.IMREAD_GRAYSCALE)
+
+        matches = cv2.matchTemplate(screen_gray, img_gray, cv2.TM_CCOEFF_NORMED)
+        _, match_val, _, match_tl = cv2.minMaxLoc(matches)
+        if match_val < 0.9: print(f"image [{img_file}] was not found."); return None
+        
+        match_x, match_y = match_tl
+        match_h, match_w = img_gray.shape
+        if verbose: print(f"image [{img_file}] was found at {match_tl} with w={match_w}, h={match_h} and confidence={match_val:.3f}")
+        return (match_x, match_y, match_w, match_h)
     
     @staticmethod
-    def find_lines(img: Image.Image | np.ndarray, length: int) -> List[Line]:
+    def _cv2_loc_rect(img: np.ndarray, loc: WindowLocation, color: RGBColor, stroke=1) -> None:
+        '''Wrapper for drawing a rectangle on a cv2 canvas given a `WindowLocation` instead of 2 points.'''
+        x,y,w,h = loc
+        cv2.rectangle(img, (x,y), (x+w,y+h), color, stroke)
+
+    def find_lines(self, img: Image.Image | np.ndarray, length: int, verbose=False) -> List[Line]:
         if isinstance(img, Image.Image): img = np.array(img)
         img_gray = cv2.cvtColor(img, cv2.COLOR_RGB2GRAY)
-        img_edges = cv2.Canny(img_gray, threshold1=100, threshold2=200)
+        img_edges = cv2.Canny(img_gray, threshold1=50, threshold2=200)
         lines = cv2.HoughLinesP(img_edges, 1, theta=np.pi/180, threshold=50, minLineLength=length, maxLineGap=5)
+
+        flows_counter_loc = self.find_img(img_gray, './assets/flows_counter.png', verbose=verbose)
+        flows_counter_bottom = flows_counter_loc[1] + flows_counter_loc[3]
+
+        hint_lines_loc = self.find_img(img_gray, './assets/hint_lines.png', verbose=verbose)
+        hint_lines_top = hint_lines_loc[1]
+
+        cv2.imshow('edges', img_edges); cv2.waitKey(0)
     
         hlines = []
         vlines = []
         for line in lines:
             x1, y1, x2, y2 = line[0]
             line_angle = np.arctan2(y2 - y1, x2 - x1) * 180 / np.pi
-            if abs(line_angle) < 2:
-                hlines.append((x1, y1, x2, y2))
-            elif abs(line_angle) > 88:
-                vlines.append((x1, y1, x2, y2))
+            if abs(line_angle) < 1 and flows_counter_bottom < y1 and y2 < hint_lines_top:
+                hlines.append(line[0])
+            elif abs(line_angle) > 89:
+                vlines.append(line[0])
 
         img_lines = cv2.cvtColor(img_edges, cv2.COLOR_GRAY2BGR)
         for line in hlines:
             x1, y1, x2, y2 = line
-            cv2.line(img_lines, (x1, y1), (x2, y2), (0, 0, 255), 2)
+            cv2.line(img_lines, (x1, y1), (x2, y2), (0, 0, 255), 1)
         for line in vlines:
             x1, y1, x2, y2 = line
-            cv2.line(img_lines, (x1, y1), (x2, y2), (0, 255, 0), 2)
+            cv2.line(img_lines, (x1, y1), (x2, y2), (0, 255, 0), 1)
+        FlowBot._cv2_loc_rect(img_lines, flows_counter_loc, (255,0, 0))
+        FlowBot._cv2_loc_rect(img_lines, hint_lines_loc, (255,0, 0))
         
-        print(lines)
         cv2.imwrite('lines.png', img_lines)
-        cv2.imshow('lines', img_lines)
-        cv2.waitKey(0)
+        cv2.imshow('lines', img_lines); cv2.waitKey(0)
 
     @staticmethod
     def grid_to_txt(grid: Grid, txt_path: str) -> None:
@@ -97,19 +126,13 @@ class FlowBot:
         
         print(f"Window not found: {target_window}")
 
-    @staticmethod
-    def screen_capture(window_location: WindowLocation, save_png=False) -> Image.Image:
-        '''Screenshot the game window for later use.'''
-        X,Y,W,H = window_location
+    def screen_capture(region: WindowLocation, save_png: bool | str = False) -> Image.Image:
+        '''Save a region of the screen as an image.'''
+        X,Y,W,H = region
         with mss() as sct:
-            sct_img = sct.grab({
-                "top": Y,
-                "left": X,
-                "width": W,
-                "height": H
-            })
+            sct_img = sct.grab({"left": X, "top": Y, "width": W, "height": H})
             img = Image.frombytes('RGB', sct_img.size, sct_img.bgra, 'raw', 'BGRX')
-            if save_png: img.save(os.path.join(os.getcwd(), 'puzzle.png'))
+            if save_png: img.save(os.path.join(os.getcwd(), save_png))
         return img
 
     def cell_to_screen(self, r: int, c: int) -> Coord:
@@ -238,7 +261,7 @@ class FlowBot:
 
 
 
-def identify_color(rgb: RGBt) -> str:
+def identify_color(rgb: RGBColor) -> str:
     '''RGBA to a letter representing the color, assumed to be one listed below.
     White is the "last" color to show up (in 9x9 time trials).'''
     R,G,B = rgb

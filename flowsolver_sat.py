@@ -331,9 +331,7 @@ class PuzzleRect(Puzzle):
         return clauses
     
     def parse_solution(self, soln: List[int]) -> Grid | None:
-        if not soln:
-            print("No solution")
-            return None
+        if not soln: print("No solution"); return None
         
         soln.insert(0, 0) # insert at index 0 so that SAT variables can index directly into their parity in the solution
         
