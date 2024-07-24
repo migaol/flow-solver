@@ -5,32 +5,26 @@ More info on the Glucose solver: https://github.com/audemard/glucose
 '''
 
 import sys
-from utilities import Timestamp
+from utilities import *
 from pysat.solvers import Glucose42
-from typing import TypeVar, Any, List, Dict, Tuple, Generator
+from typing import Any, List, Dict, Tuple, Generator
 from abc import ABC, abstractmethod
 import itertools
-
-T = TypeVar('T')
-Grid = List[List[T]]
-Clause = List[int]
-Coord = Tuple[int, int]
-PuzzleState = Grid | Any
 
 class Puzzle(ABC):
     '''Puzzle information and SAT reducer.'''
     state: PuzzleState
     n_colors: int
-    terminals: Dict
-    def __init__(self, source: str | PuzzleState) -> None:
-        if isinstance(source, str):
-            self.state = self.from_txt(source)
+    terminals: Dict[ColorID, Coord]
+    def __init__(self, puzzle_source: str | PuzzleState) -> None:
+        if isinstance(puzzle_source, str):
+            self.state = self.from_txt(puzzle_source)
         else:
-            self.state = source
-            self.terminals = self.find_terminals()
+            self.state = puzzle_source
+            self.find_terminals()
 
     @staticmethod
-    def _cell_is_empty(char: str) -> bool:
+    def cell_is_empty(char: str) -> bool:
         '''Check whether a char represents an empty cell.'''
         return char in ['.',' ']
 
@@ -80,41 +74,6 @@ class Puzzle(ABC):
             clauses.append([var1, -var2] + exceptions) # NOT var1  OR var2      OR exceptions
         return clauses
 
-    @abstractmethod
-    def from_txt(self, puzzle_txt: str) -> PuzzleState:
-        '''Convert a puzzle from a .txt file to a numerical representation.
-        Unique numbers represent the same color; 0 represents an open cell.
-        Additionally finds an arbitrary source for each color.
-        Assumes puzzle validity.  Returns the puzzle as an object.'''
-
-    @abstractmethod
-    def find_terminals(self) -> Dict[int, Coord]:
-        '''TODO'''
-
-    @abstractmethod
-    def to_str(self, puzzle_state: Any) -> str:
-        '''Represent the puzzle state as a string.'''
-
-    @abstractmethod
-    def var_vertex(self, *args, **kwargs) -> int:
-        '''Create a uniquely identifiable SAT variable, as an int,
-        which represents a cell being a certain color.'''
-    
-    @abstractmethod
-    def var_edge(self, *args, **kwargs) -> int:
-        '''Create a uniquely identifiable SAT variable, as an int,
-        which represents an edge being a certain color (or none).'''
-
-    @abstractmethod
-    def create_clauses(self, *args, **kwargs) -> List[Clause]:
-        '''Create clauses for vertices and edges.  These clauses generally represent:
-        - terminal cells are their original color and at most this one color
-        - terminal cells have exactly one neighbor with the same color
-        - empty/pipe cells are exactly one color
-        - empty/pipe cells which are connected have the same color
-        - empty/pipe cells neighbor exactly two other cells of the same color
-        '''
-
     @staticmethod
     def solve_sat(clauses: List[Clause]) -> List[int]:
         '''Solve a CNF formula by feeding into a SAT solver.'''
@@ -128,12 +87,45 @@ class Puzzle(ABC):
         return soln
 
     @abstractmethod
+    def to_str(self, puzzle_state: Any) -> str:
+        '''Represent the puzzle state as a string.'''
+
+    @abstractmethod
+    def from_txt(self, puzzle_txt: str) -> PuzzleState:
+        '''Convert a puzzle from a .txt file to a numerical representation.
+        Unique numbers represent the same color; 0 represents an open cell.
+        Additionally finds an arbitrary/terminal for each color.
+        Assumes puzzle validity.  Returns the puzzle as an object.'''
+
+    @abstractmethod
+    def find_terminals(self, *args, **kwargs) -> None:
+        '''Find terminal cells from a grid input.'''
+
+    @abstractmethod
+    def var_vertex(self, *args, **kwargs) -> int:
+        '''Create a uniquely identifiable SAT variable, as an int, which represents a cell being a certain color.'''
+    
+    @abstractmethod
+    def var_edge(self, *args, **kwargs) -> int:
+        '''Create a uniquely identifiable SAT variable, as an int, which represents an edge existing (or not).'''
+
+    @abstractmethod
+    def create_clauses(self, *args, **kwargs) -> List[Clause]:
+        '''Create clauses for vertices and edges.  These clauses generally represent:
+        - terminal cells are their original color, and at most this one color
+        - terminal cells have exactly one neighbor with the same color
+        - empty/pipe cells are exactly one color
+        - empty/pipe cells which are connected have the same color
+        - empty/pipe cells neighbor exactly two other cells of the same color
+        '''
+
+    @abstractmethod
     def parse_solution(self) -> Any:
         '''Convert SAT solution variables into a readable form.'''
 
     @abstractmethod
     def solve_puzzle(self, print_soln=False, verbose=False) -> Grid:
-        '''Solve the puzzle and decode the solution.'''
+        '''Solve the puzzle and decode the solution.  Return the solution grid.'''
 
     @abstractmethod
     def _verify_satvars(self, print_clauses=False) -> None:
@@ -147,7 +139,7 @@ class PuzzleRect(Puzzle):
         ('L', 0, -1),
         ('R', 0, 1)
     ]
-    def __init__(self, source: str | PuzzleState) -> None:
+    def __init__(self, source: str | Grid) -> None:
         super().__init__(source)
         self.n_colors = max(max(row) for row in self.state)
         self.rows = len(self.state)
@@ -158,6 +150,15 @@ class PuzzleRect(Puzzle):
     def __repr__(self) -> str:
         return self.to_str(self.state)
     
+    def to_str(self, puzzle_state: Grid, alpha=False) -> str:
+        if alpha: # breaks with more than 26 colors, which never happens in the game
+            return '\n'.join(' '.join(f"{chr(ord('a') + cell-1)}" if cell > 0 else "-"
+                                      for cell in row) for row in puzzle_state)
+
+        max_length = max(len(str(cell)) for row in puzzle_state for cell in row)
+        return '\n'.join(' '.join(f"{cell:0{max_length}d}" if cell > 0 else "-"*max_length
+                                  for cell in row) for row in puzzle_state)
+    
     def from_txt(self, puzzle_txt: str) -> PuzzleState:
         symbols = {}
         self.terminals = {}
@@ -167,7 +168,7 @@ class PuzzleRect(Puzzle):
             for r,row in enumerate(file.readlines()):
                 puzzle_row = []
                 for c,char in enumerate(row.removesuffix('\n')):
-                    if Puzzle._cell_is_empty(char): # open cell
+                    if Puzzle.cell_is_empty(char): # open cell
                         puzzle_row.append(0)
                     else:
                         if char not in symbols:
@@ -178,22 +179,12 @@ class PuzzleRect(Puzzle):
         
         return puzzle_grid
 
-    def find_terminals(self) -> Dict[int, Coord]:
-        terminals = {}
+    def find_terminals(self) -> None:
+        self.terminals = {}
         for r,row in enumerate(self.state):
             for c,cell in enumerate(row):
-                if not Puzzle._cell_is_empty(cell) and cell not in terminals:
-                    terminals[cell] = (r,c)
-        return terminals
-
-    def to_str(self, puzzle_state: Grid, alpha=False) -> str:
-        if alpha:
-            return '\n'.join(' '.join(f"{chr(ord('a') + cell-1)}" if cell > 0 else "-"
-                                      for cell in row) for row in puzzle_state)
-
-        max_length = max(len(str(cell)) for row in puzzle_state for cell in row)
-        return '\n'.join(' '.join(f"{cell:0{max_length}d}" if cell > 0 else "-"*max_length
-                                  for cell in row) for row in puzzle_state)
+                if not Puzzle.cell_is_empty(cell) and cell not in self.terminals:
+                    self.terminals[cell] = (r,c)
 
     def var_vertex(self, r: int, c: int, clr: int) -> int:
         '''Create a uniquely identifiable SAT variable, as an int, which represents
@@ -276,10 +267,9 @@ class PuzzleRect(Puzzle):
         '''Check whether the cell at (row, col) exists in the puzzle.'''
         return 0 <= r < self.rows and 0 <= c < self.cols
 
-    def neighbors(self, r: int, c: int) -> List[Tuple[int, int, int]]:
-        '''Return a list of valid neighbors of the given cell coordinates.
-        Each neighbor is represented as: (direction bit, row, column)'''
-        return [(dir, r+dr, c+dc) for (dir, dr, dc) in self.DIRECTIONS if self.valid_cell(r+dr, c+dc)]
+    def neighbors(self, r: int, c: int) -> List[Coord]:
+        '''Return a list of valid neighbors of the given cell coordinates.'''
+        return [(r+dr, c+dc) for dir, dr, dc in self.DIRECTIONS if self.valid_cell(r+dr, c+dc)]
 
     def create_clauses(self, print_clauses=False) -> List[Clause]:
         clauses = []
@@ -295,7 +285,7 @@ class PuzzleRect(Puzzle):
                 new_clauses.extend([-self.var_vertex(r,c,clr)] for clr in self.iter_colors() if clr != cell)
 
                 # exactly one neighbor vertex is this color
-                neighbors_this_color = [self.var_vertex(nr,nc,cell) for dir,nr,nc in self.neighbors(r,c)]
+                neighbors_this_color = [self.var_vertex(nr,nc,cell) for nr,nc in self.neighbors(r,c)]
                 new_clauses.extend(Puzzle.exactly_one(neighbors_this_color))
 
                 # don't need to consider incident edges, since it will be covered by pipe vertices
@@ -306,7 +296,7 @@ class PuzzleRect(Puzzle):
                 new_clauses.extend(Puzzle.exactly_one(cell_is_color))
 
                 # exactly two incident edges exist
-                incident_edges = [self.var_edge(r,c,nr,nc) for dir,nr,nc in self.neighbors(r,c)]
+                incident_edges = [self.var_edge(r,c,nr,nc) for nr,nc in self.neighbors(r,c)]
                 new_clauses.extend(Puzzle.exactly_two(incident_edges))
 
             clauses.extend(new_clauses)
@@ -387,8 +377,3 @@ class PuzzleRect(Puzzle):
             eset.add(evar)
             if print_clauses: print(r1, c1, r2, c2, evar, self._parse_var_edge(evar, as_str=True))
         print(f"edge size:{len(eset)} / expected:{(self.rows-1)*self.cols + (self.cols-1)*self.rows}")
-
-# puzzle = PuzzleRect('puzzle.txt')
-# print(puzzle)
-# puzzle.solve_puzzle(print_soln=True, verbose=True)
-# puzzle._verify_satvars(print_clauses=False)
