@@ -23,10 +23,8 @@ class Puzzle(ABC):
     def __init__(self, source: str | PuzzleState) -> None:
         if isinstance(source, str):
             self.state = self.from_txt(source)
-        elif isinstance(source, PuzzleState):
-            self.state = source
         else:
-            raise TypeError("Source must be the file name of a .txt file or a valid puzzle representation.")
+            self.state = source
 
     @staticmethod
     def _cell_is_empty(char: str) -> bool:
