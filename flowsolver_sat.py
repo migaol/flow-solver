@@ -14,17 +14,20 @@ import itertools
 T = TypeVar('T')
 Grid = List[List[T]]
 Clause = List[int]
+Coord = Tuple[int, int]
 PuzzleState = Grid | Any
 
 class Puzzle(ABC):
     '''Puzzle information and SAT reducer.'''
     state: PuzzleState
     n_colors: int
+    terminals: Dict
     def __init__(self, source: str | PuzzleState) -> None:
         if isinstance(source, str):
             self.state = self.from_txt(source)
         else:
             self.state = source
+            self.terminals = self.find_terminals()
 
     @staticmethod
     def _cell_is_empty(char: str) -> bool:
@@ -85,6 +88,10 @@ class Puzzle(ABC):
         Assumes puzzle validity.  Returns the puzzle as an object.'''
 
     @abstractmethod
+    def find_terminals(self) -> Dict[int, Coord]:
+        '''TODO'''
+
+    @abstractmethod
     def to_str(self, puzzle_state: Any) -> str:
         '''Represent the puzzle state as a string.'''
 
@@ -125,7 +132,7 @@ class Puzzle(ABC):
         '''Convert SAT solution variables into a readable form.'''
 
     @abstractmethod
-    def solve_puzzle(self, print_soln=False, verbose=False) -> None:
+    def solve_puzzle(self, print_soln=False, verbose=False) -> Grid:
         '''Solve the puzzle and decode the solution.'''
 
     @abstractmethod
@@ -134,15 +141,11 @@ class Puzzle(ABC):
 
 class PuzzleRect(Puzzle):
     '''Puzzle class implementation for standard rectangular puzzles.'''
-    U = 0b0001
-    D = 0b0010
-    L = 0b0100
-    R = 0b1000
     DIRECTIONS = [
-        (U, -1, 0),
-        (D, 1, 0),
-        (L, 0, -1),
-        (R, 0, 1)
+        ('U', -1, 0),
+        ('D', 1, 0),
+        ('L', 0, -1),
+        ('R', 0, 1)
     ]
     def __init__(self, source: str | PuzzleState) -> None:
         super().__init__(source)
@@ -157,7 +160,7 @@ class PuzzleRect(Puzzle):
     
     def from_txt(self, puzzle_txt: str) -> PuzzleState:
         symbols = {}
-        self.sources = {}
+        self.terminals = {}
         puzzle_grid: Grid = []
 
         with open(puzzle_txt, 'r') as file:
@@ -169,11 +172,19 @@ class PuzzleRect(Puzzle):
                     else:
                         if char not in symbols:
                             symbols[char] = len(symbols) + 1
-                            self.sources[symbols[char]] = (r,c)
+                            self.terminals[symbols[char]] = (r,c)
                         puzzle_row.append(symbols[char])
                 puzzle_grid.append(puzzle_row)
         
         return puzzle_grid
+
+    def find_terminals(self) -> Dict[int, Coord]:
+        terminals = {}
+        for r,row in enumerate(self.state):
+            for c,cell in enumerate(row):
+                if not Puzzle._cell_is_empty(cell) and cell not in terminals:
+                    terminals[cell] = (r,c)
+        return terminals
 
     def to_str(self, puzzle_state: Grid, alpha=False) -> str:
         if alpha:
@@ -341,7 +352,7 @@ class PuzzleRect(Puzzle):
         
         return puzzle_soln
 
-    def solve_puzzle(self, verbose=False, print_soln=False) -> None:
+    def solve_puzzle(self, verbose=False, print_soln=False) -> Grid:
         ts = Timestamp()
 
         clauses = self.create_clauses(print_clauses=False)
@@ -357,6 +368,8 @@ class PuzzleRect(Puzzle):
         if verbose:
             print(f"number of clauses: {len(clauses):,}")
             print(ts.to_str())
+
+        return puzzle_soln
 
     def _verify_satvars(self, print_clauses=False) -> None:
         vset = set()

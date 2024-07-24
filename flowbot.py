@@ -29,9 +29,20 @@ class FlowBot:
         self.left_margin, self.top_margin, self.grid_width, self.grid_height, self.cell_size =\
             self.get_puzzle_dims(self.puzzle_img, verbose=verbose)
         self.puzzle_img = self.trim_puzzle_img(self.puzzle_img)
+        self.puzzle_img.save(os.path.join(os.getcwd(), 'trimmed_puzzle.png'))
         self.grid_colors = self.get_grid(self.puzzle_img, verbose=verbose)
 
         self.puzzle = PuzzleRect(self.grid_colors) # get puzzle
+
+        terminals = self.puzzle.terminals
+        soln_grid = self.puzzle.solve_puzzle()
+
+        paths = [self.find_path(soln_grid, terminals[i], i, verbose=verbose) for i in self.puzzle.iter_colors()]
+        dirs = [None] + [self.coord_to_dirs(i, verbose=verbose) for i in paths]
+
+        for color in self.puzzle.iter_colors():
+            clr_path = self.merge_dirs(terminals[color], dirs[color], verbose=verbose)
+            self.drag_cursor_cells(clr_path, duration=0.3, pause=True, verbose=verbose)
 
 
     def find_img(self, screen_gray: np.ndarray, img_file: str, screen_is_gray=True, verbose=False) -> WindowLocation | None:
@@ -62,10 +73,10 @@ class FlowBot:
         img_edges = cv2.Canny(img_gray, threshold1=50, threshold2=100)
         lines = cv2.HoughLinesP(img_edges, 1, theta=np.pi/180, threshold=10, minLineLength=50, maxLineGap=5)
 
-        flows_counter_loc = self.find_img(img_gray, './assets/flows_counter.png', verbose=verbose)
+        flows_counter_loc = self.find_img(img_gray, './assets/flows_counter_1680x1050.png', verbose=verbose)
         flows_counter_bottom = flows_counter_loc[1] + flows_counter_loc[3]
 
-        hint_lines_loc = self.find_img(img_gray, './assets/hint_lines.png', verbose=verbose)
+        hint_lines_loc = self.find_img(img_gray, './assets/hint_lines_1680x1050.png', verbose=verbose)
         hint_lines_top = hint_lines_loc[1]
 
         if show_img_process: cv2.imshow('edges', img_edges); cv2.waitKey(0)
@@ -172,16 +183,17 @@ class FlowBot:
         return (x, y)
     
     def trim_puzzle_img(self, img: Image.Image) -> Image.Image:
-        '''Trim a puzzle image by specified puzzle dimensions.'''
+        '''Trim a puzzle image to specified puzzle dimensions.'''
         return img.crop((
-            self.left_margin,
-            self.top_margin,
-            self.left_margin + self.grid_width * self.cell_size,
-            self.top_margin + self.grid_height * self.cell_size
+            self.left_margin*2,
+            self.top_margin*2,
+            self.left_margin*2 + self.grid_width * self.cell_size*2,
+            self.top_margin*2 + self.grid_height * self.cell_size*2
         ))
 
     def get_grid(self, img: Image.Image, verbose=False) -> Grid:
         '''Find the grid of colors.'''
+        grid_centers = [[None]*self.grid_height for _ in range(self.grid_width)]
         grid_rgbs = [[None]*self.grid_height for _ in range(self.grid_width)]
         grid_colors = [[None]*self.grid_height for _ in range(self.grid_width)]
         color_map = {}
@@ -191,10 +203,11 @@ class FlowBot:
 
         for r in range(self.grid_height):
             for c in range(self.grid_width):
-                cx = c * self.cell_size + self.cell_size // 2
-                cy = r * self.cell_size + self.cell_size // 2
+                cx = c * self.cell_size*2 + self.cell_size# // 2
+                cy = r * self.cell_size*2 + self.cell_size# // 2
                 pixel_color = img.getpixel((cx, cy))
                 grid_rgbs[r][c] = pixel_color
+                grid_centers[r][c] = (cx,cy)
 
                 # check for existing color similarity
                 found = False
@@ -213,6 +226,10 @@ class FlowBot:
                     color_map[pixel_color] = grid_colors[r][c] = new_color_id
 
         if verbose:
+            print("*"*10 + " Cell Centers " + "*"*10)
+            for row in grid_centers:
+                print(row)
+            
             print("*"*10 + " RGB " + "*"*10)
             for row in grid_rgbs:
                 print(row)
@@ -228,11 +245,12 @@ class FlowBot:
         maximum vertical cells (grid height), and cell size.'''
         
         hlines, vlines = self.find_lines(puzzle_img, verbose=verbose, show_img_process=verbose)
-        margin_left, margin_top = vlines[0][0], hlines[0][1]
-        width, height = len(vlines)-1, len(hlines)-1
-        cell_size = (vlines[-1][0] - margin_left) // width
-
-        return margin_left, margin_top, width, height, cell_size 
+        margin_left, margin_top, margin_right = vlines[0][0]//2, hlines[0][1]//2, vlines[-1][0]//2
+        grid_width, grid_height = len(vlines)-1, len(hlines)-1
+        cell_size = (margin_right - margin_left) // grid_width
+        
+        if verbose: print(f"{margin_left=} {margin_top=} {grid_width=} {grid_height=} {cell_size=}")
+        return margin_left, margin_top, grid_width, grid_height, cell_size 
 
     def find_path(self, color_grid: Grid, source: Coord, color: int, verbose=False) -> List[Coord]:
         '''Find the path of grid coordinates from given color source to the sink.'''
@@ -268,8 +286,7 @@ class FlowBot:
         if verbose: print(directions)
         return directions
     
-    @staticmethod
-    def merge_dirs(start: Coord, directions: List[str], verbose=False) -> List[Coord]:
+    def merge_dirs(self, start: Coord, directions: List[str], verbose=False) -> List[Coord]:
         '''Merge a direction path into a minimal number of grid coordinates in the path.'''
         if len(directions) > 1: directions.pop() # skip sink, it is automatically connected to the penultimate pipe
         merged_dirs = []
@@ -283,14 +300,13 @@ class FlowBot:
                 merged_dirs.append((curr_dir, steps))
                 curr_dir = dir
                 steps = 1
-
         merged_dirs.append((curr_dir, steps))
 
         coordinates = [start]
         x, y = start
 
         for dir, steps in merged_dirs:
-            for dir_char, dx, dy in DIRECTIONS:
+            for dir_char, dx, dy in self.puzzle.DIRECTIONS:
                 if dir == dir_char:
                     x += steps * dx
                     y += steps * dy
@@ -301,30 +317,30 @@ class FlowBot:
         return coordinates
 
 
-    def drag_cursor_cells(self, cells: List[Coord], duration=0, verbose=False):
+    def drag_cursor_cells(self, cells: List[Coord], duration=0, pause=False, verbose=False):
         '''Drag the cursor along the given cells.'''
         r0, c0 = cells[0]
-        pag.moveTo(self.cell_to_screen(r0,c0), _pause=False)
+        pag.moveTo(self.cell_to_screen(r0,c0), _pause=pause)
         if verbose: print(f"{cells[0]} | {self.cell_to_screen(r0,c0)}")
 
         for r,c in cells[1:]:
-            pag.dragTo(self.cell_to_screen(r,c), duration=duration, button='left', _pause=False)
+            pag.dragTo(self.cell_to_screen(r,c), duration=duration, button='left', _pause=pause)
             if verbose: print(f" -> ({r}, {c}) | {self.cell_to_screen(r,c)}")
 
-    def drag_cursor_coords(screen_coords: List[Coord], duration=0, verbose=False):
+    def drag_cursor_coords(screen_coords: List[Coord], duration=0, pause=False, verbose=False):
         '''Drag the cursor along the given coordinates.'''
-        pag.moveTo(screen_coords[0], _pause=False)
+        pag.moveTo(screen_coords[0], _pause=pause)
         if verbose: print(f"{screen_coords[0]}")
 
         for x,y in screen_coords[1:]:
-            pag.dragTo(screen_coords[x][y], duration=duration, button='left', _pause=False)
+            pag.dragTo(screen_coords[x][y], duration=duration, button='left', _pause=pause)
             if verbose: print(f" -> {screen_coords[x][y]}")
 
 
 
 if __name__ == '__main__':
     bot = FlowBot(verbose=True)
-    bot.solve_puzzle(verbose=True)
+    bot.solve_puzzle(verbose=False)
 
 
     # LIMIT = 99 # limit on number of puzzles solved, only use for debugging purposes
