@@ -183,6 +183,7 @@ class FlowBot:
         if verbose: print(f"monitor {monitor}")
         return monitor.width, monitor.height
 
+    @staticmethod
     def screen_capture(bbox: WindowLocation, save_png: bool | str = False) -> Image.Image:
         '''Save a region of the screen as an image.'''
         X,Y,W,H = bbox
