@@ -13,14 +13,14 @@ from utilities import *
 class FlowBot:
     BASE_TOP_MARGIN = 28 # height of the title bar
     def __init__(self, verbose=False) -> None:
-        self.window_location = FlowBot.get_window("Flow", verbose=verbose)
-        self.X, self.Y, self.W, self.H = self.window_location
+        self.window_loc = FlowBot.get_window("Flow", verbose=verbose)
+        self.X, self.Y, self.W, self.H = self.window_loc
         self.monitor_w, self.monitor_h = FlowBot.get_monitor(verbose=verbose)
 
     def solve_puzzle(self, verbose=False, show_imgs=False, show_ts=True) -> None:
         ts = Timestamp()
 
-        self.puzzle_img = FlowBot.screen_capture(self.window_location, save_name='puzzle.png' if verbose else False)
+        self.puzzle_img = FlowBot.screen_capture(self.window_loc, save_name='puzzle.png' if verbose else False)
         if show_imgs: imgshow('puzzle', self.puzzle_img)
         ts.add('screenshot')
 
@@ -42,6 +42,7 @@ class FlowBot:
         dirs = [None] + [self.coord_to_dirs(i, verbose=verbose) for i in paths] # offset by 1 to match color indices
         ts.add('compute mouse path')
 
+        if show_imgs: FlowBot.focus_window("Flow"); pag.click(self.window_loc[0], self.window_loc[1])
         for color in self.puzzle.iter_colors():
             clr_path = self.merge_dirs(terminals[color], dirs[color], verbose=verbose)
             self.drag_cursor_cells(clr_path, duration=0, pause=False, verbose=verbose)
@@ -49,19 +50,22 @@ class FlowBot:
 
         if show_ts: print(ts.to_str())
 
-    def find_img(self, screen: np.ndarray, img_file: str, screen_is_gray=True, verbose=False) -> WindowLocation | None:
-        '''Find `img_file` on `screen`.  Match confidence coefficient is expected to be > 0.9
-        (in practice, it is almost always close to perfect, 1.000).'''
+    def find_img(self, screen: np.ndarray, img_file: str, search_region: WindowLocation,
+                 screen_is_gray=True, verbose=False) -> WindowLocation | None:
+        '''Find `img_file` on `screen` within the search region specified.
+        Match confidence coefficient is expected to be >= 0.9 (in practice, it is almost always close to perfect, 1.000).'''
+
+        tdelta = time.time()
 
         if not screen_is_gray: screen = cv2.cvtColor(screen, cv2.COLOR_RGB2GRAY) # faster matching
         img_gray = cv2.imread(img_file, cv2.IMREAD_GRAYSCALE)
 
-        tdelta = time.time()
-        matches = cv2.matchTemplate(screen, img_gray, cv2.TM_CCOEFF_NORMED)
+        search_x, search_y, search_w, search_h = search_region
+        matches = cv2.matchTemplate(screen[search_y:search_y+search_h, search_x:search_x+search_w], img_gray, cv2.TM_CCOEFF_NORMED)
         _, match_val, _, match_tl = cv2.minMaxLoc(matches)
         if match_val < 0.9: print(f"image [{img_file}] was not found ({time.time()-tdelta:.4f} s)."); return None
         
-        match_x, match_y = match_tl
+        match_x, match_y = match_tl[0] + search_x, match_tl[1] + search_y
         match_h, match_w = img_gray.shape
         if verbose: print(f"image [{img_file}] was found at {match_tl} with w={match_w}, h={match_h}" +
                           f" and confidence={match_val:.3f} in ({time.time()-tdelta:.4f} s)")
@@ -81,7 +85,7 @@ class FlowBot:
         # find edges
         img_gray_mean = np.mean(img_gray)
         if verbose: print(f"{img_gray_mean=:.2f}")
-        img_edges = cv2.Canny(img_gray, threshold1=0.75*img_gray_mean, threshold2=255, apertureSize=5)
+        img_edges = cv2.Canny(img_gray, threshold1=0.6*img_gray_mean, threshold2=255, apertureSize=5)
         if show_imgs: imgshow('edges', img_edges)
 
         # dilate to merge duplicate lines
@@ -91,13 +95,19 @@ class FlowBot:
         if show_imgs: imgshow('dilate', img_edges)
 
         # erode
-        erode_kernel_size = 11 # dilate kernel size + 2 is a typically a good number
+        erode_kernel_size = 5
         erode_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (erode_kernel_size,erode_kernel_size))
         img_edges = cv2.erode(img_edges, erode_kernel, iterations=1)
         if show_imgs: imgshow('erode', img_edges)
 
         # find lines
-        lines = cv2.HoughLinesP(img_edges, rho=1, theta=np.pi/180, threshold=800, minLineLength=50, maxLineGap=25)
+        lines = cv2.HoughLinesP(img_edges, rho=2, theta=np.pi/180, threshold=500, minLineLength=50, maxLineGap=25)
+        if show_imgs:
+            img_lines = cv2.cvtColor(img_edges, cv2.COLOR_GRAY2BGR)
+            for line in lines:
+                x1, y1, x2, y2 = line[0]
+                cv2.line(img_lines, (x1,y1), (x2,y2), (255,255,0), 3)
+            imgshow('lines unfiltered', img_lines)
     
         # filter horizontal & vertical lines
         hlines = []
@@ -133,17 +143,17 @@ class FlowBot:
         hlines = filter_duplicate_lines(hlines, 'h')
         vlines = filter_duplicate_lines(vlines, 'v')
 
-        if verbose: print(f"total lines: {len(lines)}; horizontal: {len(hlines)}, vertical: {len(vlines)}")
+        if verbose: print(f"unfiltered lines: {len(lines)}; horizontal: {len(hlines)}, vertical: {len(vlines)}")
         if show_imgs:
             img_lines = cv2.cvtColor(img_edges, cv2.COLOR_GRAY2BGR)
             for line in hlines: # red horizontal
                 x1, y1, x2, y2 = line
-                cv2.line(img_lines, (x1,y1), (x2,y2), (0,0,255), 2)
+                cv2.line(img_lines, (x1,y1), (x2,y2), (0,0,255), 3)
             for line in vlines: # green vertical
                 x1, y1, x2, y2 = line
-                cv2.line(img_lines, (x1,y1), (x2,y2), (0,255,0), 2)
+                cv2.line(img_lines, (x1,y1), (x2,y2), (0,255,0), 3)
         
-            cv2.imshow('lines', img_lines); cv2.waitKey(0)
+            imgshow('lines filtered', img_lines)
 
         return hlines, vlines
 
@@ -155,13 +165,18 @@ class FlowBot:
                 f.write(''.join(row) + '\n')
 
     @staticmethod
-    def get_window(target_window: str, verbose=False) -> WindowLocation | None:
-        '''Find the game window, bring it to focus, and return its location & dimensions.'''
-        # move to focus
+    def focus_window(target_window: str) -> None:
+        '''Bring window to focus.'''
         apps = AppKit.NSWorkspace.sharedWorkspace().runningApplications()
         for app in apps:
             if app.localizedName() == target_window:
                 app.activateWithOptions_(AppKit.NSApplicationActivateIgnoringOtherApps)
+
+    @staticmethod
+    def get_window(target_window: str, verbose=False) -> WindowLocation | None:
+        '''Find the game window, bring it to focus, and return its location & dimensions.'''
+        
+        FlowBot.focus_window(target_window) # move to focus
 
         # list windows
         windows = Quartz.CGWindowListCopyWindowInfo(
@@ -214,20 +229,32 @@ class FlowBot:
         if verbose: print_break("Crop to board region")
 
         # find screen elements to guide crop
-        flows_counter_loc = self.find_img(img_gray, f'./assets/flows_counter_{self.monitor_w}x{self.monitor_h}.png', verbose=verbose)
-        flows_counter_bottom = (flows_counter_loc[1] + flows_counter_loc[3])
-        hint_lines_loc = self.find_img(img_gray, f'./assets/hint_lines_{self.monitor_w}x{self.monitor_h}.png', verbose=verbose)
-        hint_lines_top = hint_lines_loc[1]
+        h,w = img_gray.shape
+        flows_counter_search_region = (0, 0, w//8, h//4)
+        flows_counter_loc = self.find_img(img_gray, f'./assets/flows_counter_{self.monitor_w}x{self.monitor_h}.png',
+                                          flows_counter_search_region, verbose=verbose)
+        flows_counter_bottom = (flows_counter_loc[1] + flows_counter_loc[3])+2
 
-        if show_imgs: # blue recognized images
+        hint_lines_search_region = (3*w//8, 3*h//4, w//4, h//4)
+        hint_lines_loc = self.find_img(img_gray, f'./assets/hint_lines_{self.monitor_w}x{self.monitor_h}.png',
+                                       hint_lines_search_region, verbose=verbose)
+        hint_lines_mid = hint_lines_loc[1] + hint_lines_loc[3]//2
+
+        if show_imgs:
             screen_elts = self.puzzle_img.copy()
+            
+            # blue recognized images
             FlowBot._cv2_rect_from_loc(screen_elts, flows_counter_loc, (255,0,0), stroke=3)
             FlowBot._cv2_rect_from_loc(screen_elts, hint_lines_loc, (255,0,0), stroke=3)
+            # red search regions
+            FlowBot._cv2_rect_from_loc(screen_elts, flows_counter_search_region, (0,0,255), stroke=3)
+            FlowBot._cv2_rect_from_loc(screen_elts, hint_lines_search_region, (0,0,255), stroke=3)
+
             imgshow('screen elements', screen_elts)
 
         # crop vertically to board region
-        img_cropped = img_gray[flows_counter_bottom : hint_lines_top, :]
-        if verbose: print(f"cropped {flows_counter_bottom}-{hint_lines_top}, original height {img_gray.shape[0]}")
+        img_cropped = img_gray[flows_counter_bottom : hint_lines_mid, :]
+        if verbose: print(f"cropped {flows_counter_bottom}-{hint_lines_mid}, original height {img_gray.shape[0]}")
         if show_imgs: imgshow('cropped', img_cropped)
 
         return img_cropped, flows_counter_bottom
@@ -402,4 +429,4 @@ class FlowBot:
 
 if __name__ == '__main__':
     bot = FlowBot(verbose=False)
-    bot.solve_puzzle(verbose=True, show_imgs=False)
+    bot.solve_puzzle(verbose=False, show_imgs=False)
