@@ -230,10 +230,10 @@ class FlowBot:
 
         # find screen elements to guide crop
         h,w = img_gray.shape
-        flows_counter_search_region = (0, 0, w//8, h//4)
-        flows_counter_loc = self.find_img(img_gray, f'./assets/flows_counter_{self.monitor_w}x{self.monitor_h}.png',
-                                          flows_counter_search_region, verbose=verbose)
-        flows_counter_bottom = (flows_counter_loc[1] + flows_counter_loc[3])+2
+        pipe_counter_search_region = (3*w//4, 0, w//4, h//4)
+        pipe_counter_loc = self.find_img(img_gray, f'./assets/pipe_counter_{self.monitor_w}x{self.monitor_h}.png',
+                                          pipe_counter_search_region, verbose=verbose)
+        pipe_counter_bottom = (pipe_counter_loc[1] + pipe_counter_loc[3])
 
         hint_lines_search_region = (3*w//8, 3*h//4, w//4, h//4)
         hint_lines_loc = self.find_img(img_gray, f'./assets/hint_lines_{self.monitor_w}x{self.monitor_h}.png',
@@ -244,20 +244,20 @@ class FlowBot:
             screen_elts = self.puzzle_img.copy()
             
             # blue recognized images
-            FlowBot._cv2_rect_from_loc(screen_elts, flows_counter_loc, (255,0,0), stroke=3)
+            FlowBot._cv2_rect_from_loc(screen_elts, pipe_counter_loc, (255,0,0), stroke=3)
             FlowBot._cv2_rect_from_loc(screen_elts, hint_lines_loc, (255,0,0), stroke=3)
             # red search regions
-            FlowBot._cv2_rect_from_loc(screen_elts, flows_counter_search_region, (0,0,255), stroke=3)
+            FlowBot._cv2_rect_from_loc(screen_elts, pipe_counter_search_region, (0,0,255), stroke=3)
             FlowBot._cv2_rect_from_loc(screen_elts, hint_lines_search_region, (0,0,255), stroke=3)
 
             imgshow('screen elements', screen_elts)
 
         # crop vertically to board region
-        img_cropped = img_gray[flows_counter_bottom : hint_lines_mid, :]
-        if verbose: print(f"cropped {flows_counter_bottom}-{hint_lines_mid}, original height {img_gray.shape[0]}")
+        img_cropped = img_gray[pipe_counter_bottom : hint_lines_mid, :]
+        if verbose: print(f"cropped {pipe_counter_bottom}-{hint_lines_mid}, original height {img_gray.shape[0]}")
         if show_imgs: imgshow('cropped', img_cropped)
 
-        return img_cropped, flows_counter_bottom
+        return img_cropped, pipe_counter_bottom
 
     def crop_puzzle_img(self, img: np.ndarray, verbose=False, show_imgs=False) -> np.ndarray:
         '''Crop a puzzle image to board dimensions.'''
