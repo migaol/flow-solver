@@ -1,4 +1,6 @@
 import time
+import numpy as np
+import cv2
 from typing import TypeVar, Any, List, Tuple
 
 T = TypeVar('T')
@@ -32,3 +34,11 @@ class Timestamp:
         formatted_ts = [f"{name.rjust(max_name_length)}: {t:.4f} s ({t/total_time:.2%})" for name,t in self.ts]
         formatted_ts.append(f"{'total'.rjust(max_name_length)}: {total_time:.4f} s")
         return '\n'.join(formatted_ts)
+    
+def print_break(s: str) -> None:
+    print(f"{'*'*5} {s} {'*'*5}")
+
+def imgshow(winname: str, mat: np.ndarray) -> None:
+    cv2.imshow(winname, mat)
+    cv2.waitKey(0)
+    cv2.destroyAllWindows()

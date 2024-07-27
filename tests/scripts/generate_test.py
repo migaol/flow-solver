@@ -11,4 +11,4 @@ SAVE_PNG = 'scattered-150.png'
 
 if __name__ == '__main__':
     window = FlowBot.get_window("Flow")
-    puzzle_img = FlowBot.screen_capture(window, save_png=os.path.join(TEST_DIR, SAVE_PNG))
+    puzzle_img = FlowBot.screen_capture(window, save_name=os.path.join(TEST_DIR, SAVE_PNG))
