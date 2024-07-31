@@ -33,7 +33,7 @@ class FlowBot:
 
         self.puzzle_img = self.resize_puzzle_img(self.puzzle_img, verbose=verbose, show_imgs=show_imgs)
         self.puzzle_img = self.crop_puzzle_img(self.puzzle_img, verbose=verbose, show_imgs=show_imgs)
-        self.grid_colors = self.get_grid(self.puzzle_img, verbose=verbose)
+        self.grid_colors = self.get_grid(self.puzzle_img, verbose=verbose, show_imgs=show_imgs)
         self.puzzle = PuzzleRect(self.grid_colors)
         terminals = self.puzzle.terminals
         ts.add('read and parse puzzle')
@@ -159,13 +159,15 @@ class FlowBot:
 
     def cell_to_screen(self, r: int, c: int) -> Coord:
         '''Convert cell coordinate to screen coordinates'''
-        x = c * self.cell_size + self.cell_size//2 + self.X
-        y = r * self.cell_size + self.cell_size//2 + self.Y + self.margin_top
+        x = int(c * self.cell_size + self.cell_size/2 + self.X + self.margin_left)
+        y = int(r * self.cell_size + self.cell_size/2 + self.Y + self.margin_top)
         return (x, y)
     
-    def crop_to_board_region(self, img_gray: np.ndarray, verbose=False, show_imgs=False) -> Tuple[np.ndarray, Coord]:
-        '''Crop a puzzle image vertically based on where the grid should be found.
-        Requires a grayscale image input.'''
+    def crop_to_board_region(self, img_gray: np.ndarray, verbose=False, show_imgs=False) -> Tuple[np.ndarray, WindowLocation]:
+        '''Crop a puzzle image based on where the grid is found.  Requires a grayscale image input.
+        Returns the cropped board region as a binary thresholded image,
+        and the location of the board relative to the puzzle image.
+        '''
 
         if verbose: print_break("Crop to board region")
 
@@ -202,7 +204,7 @@ class FlowBot:
 
         return img_cropped, (x,y,w,h)
     
-    def get_grid_size(self, img_cropped: np.ndarray, verbose=False, show_imgs=False) -> Tuple[int, int, int]:
+    def get_grid_size(self, img_cropped: np.ndarray, verbose=False, show_imgs=False) -> Tuple[int, int, float]:
         '''Find grid width, height, cell size.  Assume thresholded binary input.'''
 
         print_break("Get Grid Size")
@@ -215,8 +217,9 @@ class FlowBot:
 
         img_contours = cv2.cvtColor(img_edges.copy(), cv2.COLOR_GRAY2BGR)
         contours, _ = cv2.findContours(np.int32(img_edges), cv2.RETR_FLOODFILL, cv2.CHAIN_APPROX_SIMPLE)
-        cv2.drawContours(img_contours, contours, -1, (0,255,0), 1)
-        imgshow(f'Contours: all', img_contours)
+        if show_imgs:
+            cv2.drawContours(img_contours, contours, -1, (0,255,0), 1)
+            imgshow(f'Contours: all', img_contours)
 
         # filter square polygon contours
         print(f"Unfiltered contours: {len(contours)}")
@@ -269,13 +272,12 @@ class FlowBot:
         y_max = max([cv2.boundingRect(contour)[1] + cv2.boundingRect(contour)[3] for contour in cell_contours])
 
         # calculate the number of cells in each row and column, and the cell side length
-        cell_width = cv2.boundingRect(cell_contours[0])[2]
-        cell_height = cv2.boundingRect(cell_contours[0])[3]
+        cell_width, cell_height = cv2.boundingRect(cell_contours[0])[2:4]
 
         grid_width = (x_max - x_min) // cell_width
         grid_height = (y_max - y_min) // cell_height
-
-        cell_size = (cell_width + cell_height) // 4
+        
+        cell_size = ((x_max-x_min)/grid_width + (y_max-y_min)/grid_height)/2 / 2
 
         return grid_width, grid_height, cell_size
 
@@ -296,24 +298,26 @@ class FlowBot:
         if show_imgs: imgshow('resized', img_resized)
         return img_resized
 
-    def get_grid(self, img: np.ndarray, verbose=False) -> Grid:
+    def get_grid(self, img: np.ndarray, verbose=False, show_imgs=False) -> Grid:
         '''Find the grid of colors.'''
 
-        grid_centers = [[None]*self.grid_height for _ in range(self.grid_width)]
-        grid_rgbs = [[None]*self.grid_height for _ in range(self.grid_width)]
-        grid_colors = [[None]*self.grid_height for _ in range(self.grid_width)]
+        grid_centers = [[None]*self.grid_width for _ in range(self.grid_height)]
+        grid_rgbs = [[None]*self.grid_width for _ in range(self.grid_height)]
+        grid_colors = [[None]*self.grid_width for _ in range(self.grid_height)]
         color_map = {}
+        pixel_samples = img.copy()
 
         def color_distance(c1, c2): # avg manhattan distance between colors
             return sum(abs(a - b) for a, b in zip(c1, c2)) // 3
 
         for r in range(self.grid_height):
             for c in range(self.grid_width):
-                cx = c * self.cell_size + self.cell_size // 2
-                cy = r * self.cell_size + self.cell_size // 2
+                cx = int(c * self.cell_size + self.cell_size / 2)
+                cy = int(r * self.cell_size + self.cell_size / 2)
                 pixel_color = tuple(img[cy, cx].tolist())
                 grid_rgbs[r][c] = pixel_color
                 grid_centers[r][c] = (cx,cy)
+                if show_imgs: cv2.circle(pixel_samples, (cx,cy), radius=3, color=(255,255,255))
 
                 # check for existing color similarity
                 found = False
@@ -330,6 +334,7 @@ class FlowBot:
                     new_color_id = len(color_map)+1
                     color_map[pixel_color] = grid_colors[r][c] = new_color_id
 
+        if show_imgs: imgshow('Pixel samples', pixel_samples)
         if verbose:
             print("*"*10 + " Cell Centers " + "*"*10)
             for row in grid_centers:
@@ -350,13 +355,13 @@ class FlowBot:
         maximum vertical cells (grid height), and cell size.  All units in display pixels.'''
 
         img_cropped, (x,y,w,h) = self.crop_to_board_region(puzzle_img, verbose=verbose, show_imgs=show_imgs)
-        self.margin_left, self.margin_right = x//2, (x+w)//2
-        self.margin_top, self.margin_bottom = y//2, (y+h)//2
+        self.margin_left, self.margin_right = x//2+2, (x+w)//2-2
+        self.margin_top, self.margin_bottom = y//2+2, (y+h)//2-2
         self.grid_width, self.grid_height, self.cell_size =\
             self.get_grid_size(img_cropped, verbose=verbose, show_imgs=show_imgs)
         
         if verbose: print(f"{self.margin_left=} {self.margin_right=} {self.margin_top=} {self.margin_bottom=}\n" +
-                          f"{self.grid_width=} {self.grid_height=} {self.cell_size=}")
+                          f"{self.grid_width=} {self.grid_height=} {self.cell_size=:.3f}")
 
     def find_path(self, color_grid: Grid, source: Coord, color: int, verbose=False) -> List[Coord]:
         '''Find the path of grid coordinates from given color source to the sink.'''
@@ -446,4 +451,4 @@ class FlowBot:
 
 if __name__ == '__main__':
     bot = FlowBot(verbose=False)
-    bot.solve_puzzle(verbose=True, show_imgs=True)
+    bot.solve_puzzle(verbose=False, show_imgs=False)
