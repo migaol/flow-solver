@@ -12,16 +12,18 @@ from utilities import *
 class TTDuration(Enum):
     '''Valid time trial durations.'''
     _30SEC = 30
+    _60SEC = 60
     _1MIN = 60
     _2MIN = 2*60
     _4MIN = 4*60
 
+TEPSILON = 1e-4
 class WaitTime(Enum):
     '''Wait duration constants.'''
-    PUZZLE_LOAD_SERIES_INIT = 0.21
-    PUZZLE_LOAD_SERIES = 0.51
-    PUZZLE_LOAD_TT = 0.51
-    NEXT_LEVEL_BUTTON = 0.11
+    PUZZLE_LOAD_SERIES_INIT = 0.5 + TEPSILON
+    PUZZLE_LOAD_SERIES = 0.52
+    PUZZLE_LOAD_TT = 0.5 + TEPSILON
+    NEXT_LEVEL_BUTTON = 0.1 + TEPSILON
 
 
 class FlowBot:
@@ -39,6 +41,11 @@ class FlowBot:
         pag.click(duration=0, _pause=False)
         pag.sleep(puzzle_load_time.value)
 
+    def click_next_level(window_bbox: XYWH) -> None:
+        pag.sleep(WaitTime.NEXT_LEVEL_BUTTON.value)
+        pag.click(*window_bbox.center(), duration=0, _pause=False)
+        pag.sleep(WaitTime.PUZZLE_LOAD_SERIES.value)
+
     def solve_series(self, verbose=False, show_imgs=False, show_ts=True) -> None:
         '''Solve several puzzles in a row, proceeding to the next puzzle upon completing one.'''
 
@@ -55,7 +62,8 @@ class FlowBot:
             FlowBot.click_next_level(self.window_bbox)
 
     def solve_time_trial(self, duration=TTDuration._30SEC, verbose=False, show_ts=True) -> None:
-        '''Solve subsequent puzzles in a time trial.'''
+        '''Solve subsequent puzzles in a time trial.
+        In the interest of time efficiency, verbose is False for most methods, and showing images is disabled.'''
         
         try: TTDuration(duration)
         except ValueError: raise ValueError(f"Invalid duration:[{duration.value}]")
@@ -86,9 +94,9 @@ class FlowBot:
                 self.puzzle_img = FlowBot.screen_capture(puzzle_bbox, save_name='puzzle.png' if verbose else False)
                 ts_puzzle.add('Screenshot')
 
-            self.puzzle_img = FlowBot.resize_half(self.puzzle_img, verbose=verbose)
-            if it == 1: self.puzzle_img = FlowBot.crop_puzzle_img(self.puzzle_img, self.margins, verbose=verbose)
-            self.grid_colors = FlowBot.get_grid(self.puzzle_img, (self.grid_width, self.grid_height, self.cell_size), verbose=verbose)
+            self.puzzle_img = FlowBot.resize_half(self.puzzle_img)
+            if it == 1: self.puzzle_img = FlowBot.crop_puzzle_img(self.puzzle_img, self.margins)
+            self.grid_colors = FlowBot.get_grid(self.puzzle_img, (self.grid_width, self.grid_height, self.cell_size))
             self.puzzle = PuzzleRect(self.grid_colors)
             terminals = self.puzzle.terminals
             ts_puzzle.add('Read and parse puzzle')
@@ -96,13 +104,13 @@ class FlowBot:
             soln_grid = self.puzzle.solve_puzzle()
             ts_puzzle.add('Solve puzzle')
 
-            paths = [self.find_path(soln_grid, terminals[i], i, verbose=verbose) for i in self.puzzle.iter_colors()]
-            dirs = [None] + [self.coord_to_dirs(i, verbose=verbose) for i in paths] # offset by 1 to match color indices
+            paths = [self.find_path(soln_grid, terminals[i], i) for i in self.puzzle.iter_colors()]
+            dirs = [None] + [self.coord_to_dirs(i) for i in paths] # offset by 1 to match color indices
             ts_puzzle.add('Compute mouse path')
 
             for color in self.puzzle.iter_colors():
-                clr_path = self.merge_dirs(terminals[color], dirs[color], verbose=verbose)
-                self.drag_cursor_cells(clr_path, duration=0, pause=False, verbose=verbose)
+                clr_path = self.merge_dirs(terminals[color], dirs[color])
+                self.drag_cursor_cells(clr_path, duration=0, pause=False)
             ts_puzzle.add('Drag mouse')
 
             if show_ts:
@@ -113,6 +121,8 @@ class FlowBot:
 
 
     def solve_puzzle(self, verbose=False, show_imgs=False, show_ts=True) -> Timestamp:
+        '''Solve a single puzzle.'''
+
         ts = Timestamp()
         pag.moveTo(1,1, duration=0, _pause=False) # move mouse away from screenshot area
 
@@ -502,11 +512,6 @@ class FlowBot:
         return coordinates
 
 
-    def click_next_level(window_bbox: XYWH) -> None:
-        pag.sleep(WaitTime.NEXT_LEVEL_BUTTON.value)
-        pag.click(*window_bbox.center(), duration=0, _pause=False)
-        pag.sleep(WaitTime.PUZZLE_LOAD_SERIES.value)
-
     def cell_to_screen(self, r: int, c: int) -> Coord:
         '''Convert cell coordinate to screen coordinates'''
         x = int(c * self.cell_size + self.cell_size/2 + self.window_bbox.x + self.margins.l)
@@ -538,4 +543,4 @@ if __name__ == '__main__':
     bot = FlowBot(verbose=False)
     # bot.solve_puzzle(verbose=False, show_imgs=False)
     # bot.solve_series(verbose=False, show_imgs=False, show_ts=True)
-    bot.solve_time_trial(duration=TTDuration._30SEC, verbose=False, show_ts=True)
+    bot.solve_time_trial(duration=TTDuration._1MIN, verbose=False, show_ts=True)
