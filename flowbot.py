@@ -1,12 +1,14 @@
 import Quartz, AppKit, screeninfo
 import os, sys
+import objc
 import time
 from mss import mss
 import cv2
 import math
+import matplotlib.pyplot as plt
 import numpy as np
 import pyautogui as pag
-from typing import Any, List, Dict, Tuple
+from typing import Any, List, Dict, Tuple, Callable
 from flowsolver_sat import PuzzleRect
 from utilities import *
 
@@ -19,6 +21,7 @@ class FlowBot:
 
     def solve_puzzle(self, verbose=False, show_imgs=False, show_ts=True) -> None:
         ts = Timestamp()
+        pag.moveTo(1,1, duration=0, _pause=False)
 
         self.puzzle_img = FlowBot.screen_capture(self.window_loc, save_name='puzzle.png' if verbose else False)
         if show_imgs: imgshow('puzzle', self.puzzle_img)
@@ -63,7 +66,7 @@ class FlowBot:
         search_x, search_y, search_w, search_h = search_region
         matches = cv2.matchTemplate(screen[search_y:search_y+search_h, search_x:search_x+search_w], img_gray, cv2.TM_CCOEFF_NORMED)
         _, match_val, _, match_tl = cv2.minMaxLoc(matches)
-        if match_val < 0.9: print(f"image [{img_file}] was not found ({time.time()-tdelta:.4f} s)."); return None
+        if match_val < 0.9: print(f"image [{img_file}] was not found, best match {match_val} ({time.time()-tdelta:.4f} s)."); return None
         
         match_x, match_y = match_tl[0] + search_x, match_tl[1] + search_y
         match_h, match_w = img_gray.shape
@@ -77,85 +80,23 @@ class FlowBot:
         x,y,w,h = loc
         cv2.rectangle(img, (x,y), (x+w,y+h), color, stroke)
 
-    def find_lines(self, img_gray: np.ndarray, verbose=False, show_imgs=False) -> Tuple[List[Line], List[Line]]:
-        '''Find puzzle border and cell lines.'''
+    @staticmethod
+    def _cv2_morph(img: np.ndarray, op: Callable, kernel_size: int, kernel_shape=cv2.MORPH_RECT, n_iter=1) -> np.ndarray:
+        '''Execute a morphological operation `op` on `img` with the specified `kernel_size` (default square).'''
+        kernel = cv2.getStructuringElement(kernel_shape, (kernel_size,kernel_size))
+        return op(img, kernel, iterations=n_iter)
 
-        if verbose: print_break("Find lines")
-
-        # find edges
-        img_gray_mean = np.mean(img_gray)
-        if verbose: print(f"{img_gray_mean=:.2f}")
-        img_edges = cv2.Canny(img_gray, threshold1=0.6*img_gray_mean, threshold2=255, apertureSize=5)
-        if show_imgs: imgshow('edges', img_edges)
-
-        # dilate to merge duplicate lines
-        dilate_kernel_size = 9 # on different resolutions, dilate & erode may need to be changed
-        dilate_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (dilate_kernel_size,dilate_kernel_size))
-        img_edges = cv2.dilate(img_edges, dilate_kernel, iterations=1)
-        if show_imgs: imgshow('dilate', img_edges)
-
-        # erode
-        erode_kernel_size = 5
-        erode_kernel = cv2.getStructuringElement(cv2.MORPH_RECT, (erode_kernel_size,erode_kernel_size))
-        img_edges = cv2.erode(img_edges, erode_kernel, iterations=1)
-        if show_imgs: imgshow('erode', img_edges)
-
-        # find lines
-        lines = cv2.HoughLinesP(img_edges, rho=2, theta=np.pi/180, threshold=500, minLineLength=50, maxLineGap=25)
-        if show_imgs:
-            img_lines = cv2.cvtColor(img_edges, cv2.COLOR_GRAY2BGR)
-            for line in lines:
-                x1, y1, x2, y2 = line[0]
-                cv2.line(img_lines, (x1,y1), (x2,y2), (255,255,0), 3)
-            imgshow('lines unfiltered', img_lines)
-    
-        # filter horizontal & vertical lines
-        hlines = []
-        vlines = []
-        for line in lines:
-            x1, y1, x2, y2 = line[0]
-            line_angle = np.arctan2(y2 - y1, x2 - x1) * 180 / np.pi
-            if abs(line_angle) < 1:
-                hlines.append(line[0])
-            elif abs(line_angle) > 89:
-                vlines.append(line[0])
-
-        def filter_duplicate_lines(lines: List[Line], direction: str, threshold=20):
-            compare_idx, shift_idx = (0,1) if direction == 'v' else (1,0)
-
-            # for vertical lines, sort left -> right; for horizontal lines, sort by top -> bottom
-            lines.sort(key=lambda line: (line[compare_idx]))
-
-            filtered_lines = []
-            i = 0
-            while i < len(lines):
-                current_line = list(lines[i])
-                j = i + 1
-                # group lines within threshold, merge into a larger line
-                while j < len(lines) and abs(lines[j][compare_idx] - current_line[compare_idx]) <= threshold:
-                    current_line[shift_idx] = min(current_line[shift_idx], lines[j][shift_idx])
-                    current_line[shift_idx + 2] = max(current_line[shift_idx + 2], lines[j][shift_idx + 2])
-                    j += 1
-                filtered_lines.append(current_line)
-                i = j
-            return filtered_lines
-
-        hlines = filter_duplicate_lines(hlines, 'h')
-        vlines = filter_duplicate_lines(vlines, 'v')
-
-        if verbose: print(f"unfiltered lines: {len(lines)}; horizontal: {len(hlines)}, vertical: {len(vlines)}")
-        if show_imgs:
-            img_lines = cv2.cvtColor(img_edges, cv2.COLOR_GRAY2BGR)
-            for line in hlines: # red horizontal
-                x1, y1, x2, y2 = line
-                cv2.line(img_lines, (x1,y1), (x2,y2), (0,0,255), 3)
-            for line in vlines: # green vertical
-                x1, y1, x2, y2 = line
-                cv2.line(img_lines, (x1,y1), (x2,y2), (0,255,0), 3)
-        
-            imgshow('lines filtered', img_lines)
-
-        return hlines, vlines
+    @staticmethod
+    def _find_largest_contour(contours: List[np.ndarray]) -> np.ndarray:
+        '''Find the contour with maximum area.'''
+        largest = None
+        max_area = 0
+        for contour in contours:
+            area = cv2.contourArea(contour)
+            if area > max_area:
+                largest = contour
+                max_area = area
+        return largest
 
     @staticmethod
     def grid_to_txt(grid: Grid, txt_path: str) -> None:
@@ -222,48 +163,127 @@ class FlowBot:
         y = r * self.cell_size + self.cell_size//2 + self.Y + self.margin_top
         return (x, y)
     
-    def crop_to_board_region(self, img_gray: np.ndarray, verbose=False, show_imgs=False) -> Tuple[np.ndarray, int]:
+    def crop_to_board_region(self, img_gray: np.ndarray, verbose=False, show_imgs=False) -> Tuple[np.ndarray, Coord]:
         '''Crop a puzzle image vertically based on where the grid should be found.
         Requires a grayscale image input.'''
 
         if verbose: print_break("Crop to board region")
 
-        # find screen elements to guide crop
-        h,w = img_gray.shape
-        pipe_counter_search_region = (3*w//4, 0, w//4, h//4)
-        pipe_counter_loc = self.find_img(img_gray, f'./assets/pipe_counter_{self.monitor_w}x{self.monitor_h}.png',
-                                          pipe_counter_search_region, verbose=verbose)
-        pipe_counter_bottom = (pipe_counter_loc[1] + pipe_counter_loc[3])
+        k, c = 3, 5
+        img_threshold = img_gray.copy()
+        img_threshold = cv2.adaptiveThreshold(img_threshold, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY_INV, k, c)
+        if show_imgs: imgshow(f'Threshold; kernel size:{k} c:{c}', img_threshold)
 
-        hint_lines_search_region = (3*w//8, 3*h//4, w//4, h//4)
-        hint_lines_loc = self.find_img(img_gray, f'./assets/hint_lines_{self.monitor_w}x{self.monitor_h}.png',
-                                       hint_lines_search_region, verbose=verbose)
-        hint_lines_mid = hint_lines_loc[1] + hint_lines_loc[3]//2
+        # dilate to merge duplicate lines
+        img_edges = img_threshold.copy()
+        img_edges = FlowBot._cv2_morph(img_edges, cv2.dilate, 5) # on different resolutions, kernel size may need to change
+        if show_imgs: imgshow('Dilate', img_edges)
 
+        # find contours
+        contours, _ = cv2.findContours(img_edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
         if show_imgs:
-            screen_elts = self.puzzle_img.copy()
-            
-            # blue recognized images
-            FlowBot._cv2_rect_from_loc(screen_elts, pipe_counter_loc, (255,0,0), stroke=3)
-            FlowBot._cv2_rect_from_loc(screen_elts, hint_lines_loc, (255,0,0), stroke=3)
-            # red search regions
-            FlowBot._cv2_rect_from_loc(screen_elts, pipe_counter_search_region, (0,0,255), stroke=3)
-            FlowBot._cv2_rect_from_loc(screen_elts, hint_lines_search_region, (0,0,255), stroke=3)
+            img_contours = cv2.cvtColor(img_edges.copy(), cv2.COLOR_GRAY2BGR)
+            cv2.drawContours(img_contours, contours, -1, (0,0,255), 3)
+            imgshow(f'Contours: all', img_contours)
 
-            imgshow('screen elements', screen_elts)
+        # find largest contour, the board
+        largest = FlowBot._find_largest_contour(contours)
+        x, y, w, h = cv2.boundingRect(largest)
+        if verbose: print(f'Board BBox: {x=} {y=} {w=} {h=}')
+        if show_imgs:
+            cv2.drawContours(img_contours, largest, -1, (0,255,255), 25)
+            imgshow(f'Contours: largest', img_contours)
+            FlowBot._cv2_rect_from_loc(img_contours, (x,y,w,h), (0,255,0), stroke=3)
+            imgshow(f'Board BBox', img_contours)
 
-        # crop vertically to board region
-        img_cropped = img_gray[pipe_counter_bottom : hint_lines_mid, :]
-        if verbose: print(f"cropped {pipe_counter_bottom}-{hint_lines_mid}, original height {img_gray.shape[0]}")
-        if show_imgs: imgshow('cropped', img_cropped)
+        img_cropped = img_threshold[y : y+h+1, x : x+w+1]
+        if verbose: print(f"Cropped {h}x{w}; Original {img_gray.shape}")
+        if show_imgs: imgshow('Cropped', img_cropped)
 
-        return img_cropped, pipe_counter_bottom
+        return img_cropped, (x,y,w,h)
+    
+    def get_grid_size(self, img_cropped: np.ndarray, verbose=False, show_imgs=False) -> Tuple[int, int, int]:
+        '''Find grid width, height, cell size.  Assume thresholded binary input.'''
+
+        print_break("Get Grid Size")
+
+        # dilate to merge duplicate lines
+        img_edges = FlowBot._cv2_morph(img_cropped, cv2.dilate, 9) # on different resolutions, kernel size may need to change
+        if show_imgs: imgshow('Dilate', img_edges)
+        img_edges = FlowBot._cv2_morph(img_edges, cv2.erode, 11) # on different resolutions, kernel size may need to change
+        if show_imgs: imgshow('Dilate', img_edges)
+
+        img_contours = cv2.cvtColor(img_edges.copy(), cv2.COLOR_GRAY2BGR)
+        contours, _ = cv2.findContours(np.int32(img_edges), cv2.RETR_FLOODFILL, cv2.CHAIN_APPROX_SIMPLE)
+        cv2.drawContours(img_contours, contours, -1, (0,255,0), 1)
+        imgshow(f'Contours: all', img_contours)
+
+        # filter square polygon contours
+        print(f"Unfiltered contours: {len(contours)}")
+        square_contours = []
+        for contour in contours:
+            epsilon = 0.05 * cv2.arcLength(contour, True)
+            approx_poly = cv2.approxPolyDP(contour, epsilon, True)
+            if len(approx_poly) == 4 and cv2.contourArea(contour) > 100: square_contours.append(approx_poly)
+        contours = square_contours
+
+        # group contours
+        threshold_percentage = 0.15
+        contours_in_group = [False] * len(contours)
+        similar_contours = []
+        for i, contour in enumerate(contours):
+            if not contours_in_group[i]:
+                area = cv2.contourArea(contour)
+                similar_group = [i]
+                for j, other_contour in enumerate(contours):
+                    if i != j and not contours_in_group[j]:
+                        other_area = cv2.contourArea(other_contour)
+                        if abs(area - other_area) / area < threshold_percentage:
+                            similar_group.append(j)
+                            contours_in_group[j] = True
+                similar_contours.append(similar_group)
+                contours_in_group[i] = True
+
+        # draw similar contours in different colors
+        if show_imgs: 
+            for group in similar_contours:
+                color = np.random.randint(128, 255, size=3).tolist()
+                img_contours = cv2.cvtColor(img_edges.copy(), cv2.COLOR_GRAY2BGR)
+                for idx in group:
+                    cv2.drawContours(img_contours, contours, idx, color, 5)
+                imgshow(f'Contours: groups', img_contours)
+        
+        print(f"Filtered contours: {len(contours)}")
+        for group in similar_contours:
+            print(len(group), cv2.contourArea(contours[group[0]]))
+
+        # find largest group of similar contours
+        cell_contours_idx = np.argmax([len(g) for g in similar_contours])
+        print(cell_contours_idx, len(similar_contours[cell_contours_idx]))
+        cell_contours = [contours[i] for i in similar_contours[cell_contours_idx]]
+
+        # find left, right, top, bottom bounds of the cell contours
+        x_min = min([cv2.boundingRect(contour)[0] for contour in cell_contours])
+        y_min = min([cv2.boundingRect(contour)[1] for contour in cell_contours])
+        x_max = max([cv2.boundingRect(contour)[0] + cv2.boundingRect(contour)[2] for contour in cell_contours])
+        y_max = max([cv2.boundingRect(contour)[1] + cv2.boundingRect(contour)[3] for contour in cell_contours])
+
+        # calculate the number of cells in each row and column, and the cell side length
+        cell_width = cv2.boundingRect(cell_contours[0])[2]
+        cell_height = cv2.boundingRect(cell_contours[0])[3]
+
+        grid_width = (x_max - x_min) // cell_width
+        grid_height = (y_max - y_min) // cell_height
+
+        cell_size = (cell_width + cell_height) // 4
+
+        return grid_width, grid_height, cell_size
 
     def crop_puzzle_img(self, img: np.ndarray, verbose=False, show_imgs=False) -> np.ndarray:
         '''Crop a puzzle image to board dimensions.'''
 
         img_cropped = img[self.margin_top : self.margin_bottom, self.margin_left : self.margin_right]
-        if verbose: print(f"cropped ({img_cropped.shape}); original {img.shape}")
+        if verbose: print(f"cropped {img_cropped.shape}; original {img.shape}")
         if show_imgs: imgshow('cropped', img_cropped)
         return img_cropped
 
@@ -329,14 +349,11 @@ class FlowBot:
         '''Get left, right, top, and bottom grid margins, maximum horizontal cells (grid width),
         maximum vertical cells (grid height), and cell size.  All units in display pixels.'''
 
-        puzzle_img, top_offset = self.crop_to_board_region(puzzle_img, verbose=verbose, show_imgs=show_imgs)
-        hlines, vlines = self.find_lines(puzzle_img, verbose=verbose, show_imgs=show_imgs)
-
-        # divide by 2 because mac screenshots are higher resolution than the screen
-        self.margin_left, self.margin_right = vlines[0][0]//2, vlines[-1][0]//2
-        self.margin_top, self.margin_bottom = hlines[0][1]//2 + top_offset//2, hlines[-1][1]//2 + top_offset//2
-        self.grid_width, self.grid_height = len(vlines)-1, len(hlines)-1
-        self.cell_size = (self.margin_right - self.margin_left) // self.grid_width
+        img_cropped, (x,y,w,h) = self.crop_to_board_region(puzzle_img, verbose=verbose, show_imgs=show_imgs)
+        self.margin_left, self.margin_right = x//2, (x+w)//2
+        self.margin_top, self.margin_bottom = y//2, (y+h)//2
+        self.grid_width, self.grid_height, self.cell_size =\
+            self.get_grid_size(img_cropped, verbose=verbose, show_imgs=show_imgs)
         
         if verbose: print(f"{self.margin_left=} {self.margin_right=} {self.margin_top=} {self.margin_bottom=}\n" +
                           f"{self.grid_width=} {self.grid_height=} {self.cell_size=}")
@@ -429,4 +446,4 @@ class FlowBot:
 
 if __name__ == '__main__':
     bot = FlowBot(verbose=False)
-    bot.solve_puzzle(verbose=False, show_imgs=False)
+    bot.solve_puzzle(verbose=True, show_imgs=True)
