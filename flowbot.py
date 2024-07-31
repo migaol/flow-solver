@@ -4,21 +4,115 @@ from mss import mss
 import cv2
 import numpy as np
 import pyautogui as pag
+from enum import Enum
 from typing import List, Tuple, Callable
 from flowsolver_sat import PuzzleRect
 from utilities import *
 
-#TODO: move static methods to image processing class?
-# time trial mode
-# repeat/next-level mode
+class TTDuration(Enum):
+    '''Valid time trial durations.'''
+    _30SEC = 30
+    _1MIN = 60
+    _2MIN = 2*60
+    _4MIN = 4*60
+
+class WaitTime(Enum):
+    '''Wait duration constants.'''
+    PUZZLE_LOAD_SERIES_INIT = 0.21
+    PUZZLE_LOAD_SERIES = 0.51
+    PUZZLE_LOAD_TT = 0.51
+    NEXT_LEVEL_BUTTON = 0.11
+
 
 class FlowBot:
     BASE_TOP_MARGIN = 28 # height of the title bar
     def __init__(self, verbose=False) -> None:
         self.window_bbox = FlowBot.get_window("Flow", verbose=verbose)
         self.monitor_w, self.monitor_h = FlowBot.get_monitor(verbose=verbose)
+        keyboard.hook(exit_on_keypress('esc'))
 
-    def solve_puzzle(self, verbose=False, show_imgs=False, show_ts=True) -> None:
+    def wait_key_click(self, puzzle_load_time: WaitTime, move_to_window=True) -> None:
+        '''Wait for a key press, then click (and pause for the puzzle to load).
+        Should be used to position the mouse before starting.'''
+        if move_to_window: pag.moveTo(*self.window_bbox.center(), duration=0, _pause=False)
+        keyboard.read_event()
+        pag.click(duration=0, _pause=False)
+        pag.sleep(puzzle_load_time.value)
+
+    def solve_series(self, verbose=False, show_imgs=False, show_ts=True) -> None:
+        '''Solve several puzzles in a row, proceeding to the next puzzle upon completing one.'''
+
+        self.wait_key_click(WaitTime.PUZZLE_LOAD_SERIES_INIT)
+
+        ts_agg = []
+        it = 0
+        while True:
+            it += 1
+            if verbose or show_ts: print_break(f"Iter {it}")
+            puzzle_ts = self.solve_puzzle(verbose=verbose, show_imgs=show_imgs, show_ts=show_ts)
+            ts_agg.append(puzzle_ts)
+
+            FlowBot.click_next_level(self.window_bbox)
+
+    def solve_time_trial(self, duration=TTDuration._30SEC, verbose=False, show_ts=True) -> None:
+        '''Solve subsequent puzzles in a time trial.'''
+        
+        try: TTDuration(duration)
+        except ValueError: raise ValueError(f"Invalid duration:[{duration.value}]")
+        duration = duration.value
+        if verbose: print(f"Started time trial for duration {duration} sec.")
+
+        self.wait_key_click(WaitTime.PUZZLE_LOAD_TT)
+        pag.moveTo(1,1, duration=0, _pause=False) # move mouse away from screenshot area
+        ts_agg = Timestamp()
+
+        self.puzzle_img = FlowBot.screen_capture(self.window_bbox, save_name='puzzle.png' if verbose else False)
+        ts_agg.add('Initial screenshot')
+
+        puzzle_img_gray = cv2.cvtColor(self.puzzle_img, cv2.COLOR_RGB2GRAY)
+        self.set_puzzle_dims(puzzle_img_gray, verbose=verbose)
+        puzzle_bbox = self.margins.to_xywh()
+        puzzle_bbox.shift(self.window_bbox.x, self.window_bbox.y)
+        ts_agg.add('Get puzzle dimensions')
+
+        it = 0
+        while ts_agg.get_elapsed() <= duration:
+            ts_puzzle = Timestamp()
+            pag.moveTo(1,1, duration=0, _pause=False) # move mouse away from screenshot area
+            it += 1
+            if verbose or show_ts: print_break(f"Iter {it}")
+
+            if it > 1:
+                self.puzzle_img = FlowBot.screen_capture(puzzle_bbox, save_name='puzzle.png' if verbose else False)
+                ts_puzzle.add('Screenshot')
+
+            self.puzzle_img = FlowBot.resize_half(self.puzzle_img, verbose=verbose)
+            if it == 1: self.puzzle_img = FlowBot.crop_puzzle_img(self.puzzle_img, self.margins, verbose=verbose)
+            self.grid_colors = FlowBot.get_grid(self.puzzle_img, (self.grid_width, self.grid_height, self.cell_size), verbose=verbose)
+            self.puzzle = PuzzleRect(self.grid_colors)
+            terminals = self.puzzle.terminals
+            ts_puzzle.add('Read and parse puzzle')
+
+            soln_grid = self.puzzle.solve_puzzle()
+            ts_puzzle.add('Solve puzzle')
+
+            paths = [self.find_path(soln_grid, terminals[i], i, verbose=verbose) for i in self.puzzle.iter_colors()]
+            dirs = [None] + [self.coord_to_dirs(i, verbose=verbose) for i in paths] # offset by 1 to match color indices
+            ts_puzzle.add('Compute mouse path')
+
+            for color in self.puzzle.iter_colors():
+                clr_path = self.merge_dirs(terminals[color], dirs[color], verbose=verbose)
+                self.drag_cursor_cells(clr_path, duration=0, pause=False, verbose=verbose)
+            ts_puzzle.add('Drag mouse')
+
+            if show_ts:
+                print(ts_puzzle.to_str())
+                print(f"Total elapsed: {ts_agg.get_elapsed():.4f}")
+
+            pag.sleep(WaitTime.PUZZLE_LOAD_TT.value)
+
+
+    def solve_puzzle(self, verbose=False, show_imgs=False, show_ts=True) -> Timestamp:
         ts = Timestamp()
         pag.moveTo(1,1, duration=0, _pause=False) # move mouse away from screenshot area
 
@@ -52,6 +146,7 @@ class FlowBot:
         ts.add('Drag mouse')
 
         if show_ts: print(ts.to_str())
+        return ts
     
     @staticmethod
     def _cv2_rect_from_loc(img: np.ndarray, loc: XYWH, color: RGBColor, stroke=1) -> None:
@@ -407,13 +502,18 @@ class FlowBot:
         return coordinates
 
 
+    def click_next_level(window_bbox: XYWH) -> None:
+        pag.sleep(WaitTime.NEXT_LEVEL_BUTTON.value)
+        pag.click(*window_bbox.center(), duration=0, _pause=False)
+        pag.sleep(WaitTime.PUZZLE_LOAD_SERIES.value)
+
     def cell_to_screen(self, r: int, c: int) -> Coord:
         '''Convert cell coordinate to screen coordinates'''
         x = int(c * self.cell_size + self.cell_size/2 + self.window_bbox.x + self.margins.l)
         y = int(r * self.cell_size + self.cell_size/2 + self.window_bbox.y + self.margins.t)
         return (x, y)
     
-    def drag_cursor_cells(self, cells: List[Coord], duration=0, pause=False, verbose=False):
+    def drag_cursor_cells(self, cells: List[Coord], duration=0, pause=False, verbose=False) -> None:
         '''Drag the cursor along the given cells.'''
         r0, c0 = cells[0]
         pag.moveTo(self.cell_to_screen(r0,c0), _pause=pause)
@@ -423,7 +523,7 @@ class FlowBot:
             pag.dragTo(self.cell_to_screen(r,c), duration=duration, button='left', _pause=pause)
             if verbose: print(f" -> ({r}, {c}) | {self.cell_to_screen(r,c)}")
 
-    def drag_cursor_coords(screen_coords: List[Coord], duration=0, pause=False, verbose=False):
+    def drag_cursor_coords(screen_coords: List[Coord], duration=0, pause=False, verbose=False) -> None:
         '''Drag the cursor along the given coordinates.'''
         pag.moveTo(screen_coords[0], _pause=pause)
         if verbose: print(f"{screen_coords[0]}")
@@ -436,4 +536,6 @@ class FlowBot:
 
 if __name__ == '__main__':
     bot = FlowBot(verbose=False)
-    bot.solve_puzzle(verbose=False, show_imgs=False)
+    # bot.solve_puzzle(verbose=False, show_imgs=False)
+    # bot.solve_series(verbose=False, show_imgs=False, show_ts=True)
+    bot.solve_time_trial(duration=TTDuration._30SEC, verbose=False, show_ts=True)
