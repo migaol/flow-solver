@@ -2,6 +2,7 @@ import os
 import time
 import numpy as np
 import cv2
+from enum import Enum
 import keyboard
 from typing import TypeVar, Any, Union, List, Tuple, Callable
 
@@ -11,9 +12,25 @@ Clause = List[int] # List of disjunction of literals
 ColorID = int # int representation of a color
 PuzzleState = Grid | Any # Any puzzle state representation
 
-RGBColor = Tuple[int, int, int] # red, green, blue
+PxColor = Tuple[int, int, int] # RGB or BGR
 Coord = Tuple[int, int] # 2D coordinate
 Line = Tuple[int, int, int, int] # x1, y1, x2, y2
+
+class Colors(Enum):
+    # BGR colors
+    BLACK =      (  0,   0,   0)
+    WHITE =      (255, 255, 255)
+    RED =        (  0,   0, 255)
+    GREEN =      (  0, 255,   0)
+    BLUE =       (255,   0,   0)
+    YELLOW =     (  0, 255, 255)
+    CYAN =       (255, 255,   0)
+    MAGENTA =    (255,   0, 255)
+    GRAY =       (128, 128, 128)
+    DARK_GRAY =  ( 64,  64,  64)
+    LIGHT_GRAY = (192, 192, 192)
+    ORANGE =     (  0, 165, 255)
+    PURPLE =     (128,   0, 128)
 
 class LRTB: # left, right, top, bottom (extrema)
     def __init__(self, l: int, r: int, t: int, b: int) -> None:
@@ -52,7 +69,8 @@ class XYWH: # x, y, width, height (bounding box)
         self.h -= 2*px
 
 class Point:
-    def __init__(self, x: int, y: int) -> None:
+    def __init__(self, x: int | Coord, y: int = None) -> None:
+        if y is None: x,y = x # for single param inputs, assume it is a coord tuple
         self.x, self.y = x,y
 
     def __repr__(self) -> str:
@@ -163,7 +181,7 @@ def pct_diff(a: float, b: float) -> float:
     '''Percent distance.'''
     return abs(a-b)/b
 
-def color_distance(c1: RGBColor, c2: RGBColor) -> int:
+def color_distance(c1: PxColor, c2: PxColor) -> int:
     '''Averaged manhattan distance between colors.'''
     return sum(abs(a-b) for a,b in zip(c1,c2)) // 3
 
