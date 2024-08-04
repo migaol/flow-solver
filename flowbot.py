@@ -287,7 +287,7 @@ class FlowBot:
             imgshow(f'Contours: all', img_contours)
 
         # find largest contour, the board
-        BBOX_SHRINK_PX = 5
+        BBOX_SHRINK_PX = 4
         largest = FlowBot._find_largest_contour(contours)
         board_bbox = XYWH(*cv2.boundingRect(largest))
         board_bbox.shrink(BBOX_SHRINK_PX)
@@ -656,6 +656,6 @@ class FlowBot:
 
 if __name__ == '__main__':
     bot = FlowBot(verbose=False)
-    bot.solve_puzzle(verbose=False, show_imgs=False)
+    bot.solve_puzzle(verbose=False, show_imgs=True)
     # bot.solve_series(verbose=False, show_imgs=False, show_ts=True)
     # bot.solve_time_trial(duration=TTDuration._30SEC, verbose=False, show_ts=True)
