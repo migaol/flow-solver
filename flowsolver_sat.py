@@ -281,6 +281,8 @@ class PuzzleRect(Puzzle):
             if cell > 0: # terminal vertex
                 # vertex is this color
                 new_clauses.append([self.var_vertex(r,c,cell)])
+                # vertex is at most one color
+                new_clauses.extend([-self.var_vertex(r,c,clr)] for clr in self.iter_colors() if clr != cell)
 
                 # exactly one incident edge exists
                 incident_edges = [self.var_edge(r,c,nr,nc) for nr,nc in self.neighbors(r,c)]
