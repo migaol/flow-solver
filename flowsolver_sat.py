@@ -281,14 +281,10 @@ class PuzzleRect(Puzzle):
             if cell > 0: # terminal vertex
                 # vertex is this color
                 new_clauses.append([self.var_vertex(r,c,cell)])
-                # vertex is at most one color
-                new_clauses.extend([-self.var_vertex(r,c,clr)] for clr in self.iter_colors() if clr != cell)
 
-                # exactly one neighbor vertex is this color
-                neighbors_this_color = [self.var_vertex(nr,nc,cell) for nr,nc in self.neighbors(r,c)]
-                new_clauses.extend(Puzzle.exactly_one(neighbors_this_color))
-
-                # don't need to consider incident edges, since it will be covered by pipe vertices
+                # exactly one incident edge exists
+                incident_edges = [self.var_edge(r,c,nr,nc) for nr,nc in self.neighbors(r,c)]
+                new_clauses.extend(Puzzle.exactly_one(incident_edges))
             
             else: # empty vertex, future pipe vertex
                 # vertex is exactly one color
