@@ -8,6 +8,7 @@ from enum import Enum
 from typing import List, Tuple, Callable
 from flowsolver_sat import PuzzleRect
 from utilities import *
+from pathfinder import Pathfinder
 
 class TTDuration(Enum):
     '''Valid time trial durations.'''
@@ -22,7 +23,8 @@ class WaitTime(Enum):
     '''Wait duration constants.'''
     PUZZLE_LOAD_SERIES_INIT = 0.5 + TEPSILON
     PUZZLE_LOAD_SERIES = 0.52
-    PUZZLE_LOAD_TT = 0.5 + TEPSILON
+    PUZZLE_LOAD_TT = 0.50 + TEPSILON
+    LARGE_PUZZLE_LOAD_TT = 0.505 + TEPSILON
     NEXT_LEVEL_BUTTON = 0.1 + TEPSILON
 
 #TODO add puzzle logging
@@ -122,7 +124,8 @@ class FlowBot:
                 print(ts_puzzle.to_str())
                 print(f"Total elapsed: {ts_agg.get_elapsed():.4f}")
 
-            pag.sleep(WaitTime.PUZZLE_LOAD_TT.value)
+            puzzle_wait = WaitTime.PUZZLE_LOAD_TT if self.puzzle.n_cells < 40 else WaitTime.LARGE_PUZZLE_LOAD_TT
+            pag.sleep(puzzle_wait.value)
 
 
     def solve_puzzle(self, verbose=False, show_imgs=False, show_ts=True) -> Timestamp:
@@ -147,7 +150,7 @@ class FlowBot:
         terminals = self.puzzle.terminals
         ts.add('Read and parse puzzle')
 
-        soln_grid = self.puzzle.solve_puzzle()
+        soln_grid = self.puzzle.solve_puzzle(verbose=verbose)
         ts.add('Solve puzzle')
 
         paths = [self.find_path(soln_grid, terminals[i], i, verbose=verbose) for i in self.puzzle.iter_colors()]
@@ -256,6 +259,7 @@ class FlowBot:
         self.margins = bbox.to_lrtb(operation = lambda x : x//2)
         self.grid_width, self.grid_height, self.cell_size =\
             FlowBot.get_grid_size(img_cropped, verbose=verbose, show_imgs=show_imgs)
+        self.grid_tl = (self.window_bbox.x + self.margins.l, self.window_bbox.y + self.margins.t)
         
         if verbose:
             print_break("Puzzle Dimensions")
@@ -526,65 +530,11 @@ class FlowBot:
     
     def merge_path_coords(self, path: List[Coord], verbose=False) -> List[Coord]:
         '''Merge a direction path into a minimal number of screen coordinates in the path.'''
-
-        N = len(path)-1 # index of penultimate pipe
-        coords = [] # screen coord path
-        prev_tgt = None # coord of the previous target, if any
-        start_idx = 0 # index of start endpoint
-        best_end_idx = 0 # index of best endpoint
-        
-        while start_idx < N-1: # go until before penultimate pipe
-            best_end_idx = start_idx
-            for end_idx in range(start_idx + 1, N): # end index should go to penultimate pipe
-                curr_src, curr_tgt = self.find_path_line(start_idx, end_idx, path, prev_tgt=prev_tgt)
-                best_end_idx = end_idx
-                if not curr_src and not curr_tgt: # can't extend, fallback to previous cell
-                    best_end_idx = end_idx-1
-                    curr_src, curr_tgt = self.find_path_line(start_idx, best_end_idx, path, prev_tgt=prev_tgt)
-                    break
-            if not coords: coords.append(curr_src.unpack())
-            coords.append(curr_tgt.unpack())
-            start_idx = best_end_idx
-            prev_tgt = curr_src
-        
-        if verbose: print(coords)
-        return coords
-    
-    def line_intersects_all_path(self, p0: Point, p1: Point, path: List[Coord]) -> bool:
-        '''Check if the line p0-p1 intersects all cells in the given path.'''
-        for cell in path:
-            if not line_intersects_square(p0, p1, self.cell_to_square(*cell)):
-                return False
-        return True
-    
-    def find_path_line(self, i0: int, i1: int, path: List[Coord], prev_tgt=None) -> Tuple[Point | None, Point | None]:
-        def path_direction(i: int, j: int) -> Tuple[int, int]:
-            '''Find the direction a path takes from index `i` to `j`.'''
-            # direction is (x,y), path grid coordinates are (r,c) so switch indices
-            return path[j][1] - path[i][1], path[j][0] - path[i][0]
-
-        dx,dy = (Point(path[i1]) - path[i0]).unpack()
-        p0 = prev_tgt if prev_tgt else Point(self.cell_to_screen(path[i0]))
-        p1 = Point(self.cell_to_screen(path[i1]))
-
-        if not (dx == 0 or dy == 0): # not vertical/horizontal
-            pct_size = 0.75
-            cell_radius = pct_size*self.cell_size/2
-
-            # deviate from cell center in the direction of the path
-            if not prev_tgt: p0 += Point(path_direction(i0, i0+1)) * cell_radius
-            p1 += Point(path_direction(i1, i1-1)) * cell_radius
-
-            # check that the line intersects all cells in the path between them
-            if not self.line_intersects_all_path(p0, p1, path[i0:i1+1]): return None, None
-
-            # go as far as possible in the future path direction
-            if i1 < len(path)-1:
-                path_dir = path_direction(i1, i1+1)
-                while self.line_intersects_all_path(p0, p1, path[i0:i1+1]):
-                    p1 += path_dir
-        
-        return (None, p1) if prev_tgt else (p0, p1)
+        pf = Pathfinder(path, self.cell_size, pct_size=0.6)
+        path_coords = pf.find_path()
+        path_coords = [p.inverted() for p in path_coords]
+        if verbose: print(path_coords)
+        return path_coords
 
 
     def draw_paths_cells(self, img: np.ndarray, paths: List[List[Coord]], img_copy=True) -> None:
@@ -599,14 +549,14 @@ class FlowBot:
                 r0,c0 = r1,c1
         imgshow('Path', img)
 
-    def draw_paths_coords(self, img: np.ndarray, paths: List[List[Coord]], img_copy=True) -> None:
-        grid_tl = (self.window_bbox.x + self.margins.l, self.window_bbox.y + self.margins.t)
+    def draw_paths_coords(self, img: np.ndarray, paths: List[List[Point]], rel_board=True, img_copy=True) -> None:
         if img_copy: img = img.copy()
         for path in paths:
             if not path: continue
-            x0,y0 = (Point(path[0]) - grid_tl).unpack()
+            if not rel_board: path = [p - self.grid_tl for p in path]
+            x0,y0 = path[0].unpack()
             for p1 in path[1:]:
-                x1,y1 = (Point(p1) - grid_tl).unpack()
+                x1,y1 = p1.unpack()
                 cv2.line(img, (x0,y0), (x1,y1), (255,255,255), 3)
                 cv2.circle(img, (x1,y1), 5, (128,128,128), 5)
                 x0,y0 = x1,y1
@@ -642,20 +592,22 @@ class FlowBot:
             pag.dragTo(self.cell_to_screen(r,c), button='left', duration=duration, _pause=pause)
             if verbose: print(f" -> ({r}, {c}) | {self.cell_to_screen(r,c)}")
 
-    def drag_cursor_coords(self, screen_coords: List[Coord], duration=0, pause=False, verbose=False) -> None:
+    def drag_cursor_coords(self, coords: List[Point], rel_screen=False, duration=0, pause=False, verbose=False) -> None:
         '''Drag the cursor along the given coordinates.'''
 
-        pag.moveTo(screen_coords[0], duration=duration, _pause=pause)
-        if verbose: print(f"{screen_coords[0]}")
+        if not rel_screen: coords = [c + self.grid_tl for c in coords]
 
-        for p in screen_coords[1:]:
-            pag.dragTo(p, button='left', duration=duration, _pause=pause)
+        pag.moveTo(coords[0].unpack(), duration=duration, _pause=pause)
+        if verbose: print(f"{coords[0]}")
+
+        for p in coords[1:]:
+            pag.dragTo(p.unpack(), button='left', duration=duration, _pause=pause)
             if verbose: print(f" -> {p}")
 
 
 
 if __name__ == '__main__':
     bot = FlowBot(verbose=False)
-    bot.solve_puzzle(verbose=False, show_imgs=True)
+    # bot.solve_puzzle(verbose=False, show_imgs=False)
     # bot.solve_series(verbose=False, show_imgs=False, show_ts=True)
-    # bot.solve_time_trial(duration=TTDuration._30SEC, verbose=False, show_ts=True)
+    bot.solve_time_trial(duration=TTDuration._30SEC, verbose=False, show_ts=True)

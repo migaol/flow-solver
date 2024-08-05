@@ -16,6 +16,8 @@ PxColor = Tuple[int, int, int] # RGB or BGR
 Coord = Tuple[int, int] # 2D coordinate
 Line = Tuple[int, int, int, int] # x1, y1, x2, y2
 
+EPSILON = 1e-5
+
 class Colors(Enum):
     # BGR colors
     BLACK =      (  0,   0,   0)
@@ -90,15 +92,28 @@ class Point:
             return Point(self.x - other[0], self.y - other[1])
         return NotImplemented
     
-    def __mul__(self, scalar: float) -> 'Point':
+    def __mul__(self, scalar: float | int) -> 'Point':
         if isinstance(scalar, float):
-            return Point(int(self.x * scalar), int(self.y * scalar))
+            return Point(self.x * scalar, self.y * scalar)
+        if isinstance(scalar, int):
+            return Point(self.x * scalar, self.y * scalar)
         return NotImplemented
     
     def __getitem__(self, idx: int) -> int:
-        if idx == 0: return self.x
-        elif idx == 1: return self.y
+        if idx == 0: return int(self.x)
+        elif idx == 1: return int(self.y)
         raise IndexError()
+    
+    def __hash__(self):
+        return hash((self.x, self.y))
+    
+    def __eq__(self, other: object) -> bool:
+        if not isinstance(other, Point):
+            return NotImplemented
+        return self.x == other.x and self.y == other.y
+    
+    def inverted(self) -> 'Point':
+        return Point(self.y, self.x)
     
     def unpack(self) -> Coord:
         return int(self.x), int(self.y)
@@ -106,8 +121,20 @@ class Point:
     def in_square(self, square: LRTB) -> bool:
         return square.l <= self.x <= square.r and square.t <= self.y <= square.b
     
+    def is_endpoint(self, p: 'Point', q: 'Point') -> bool:
+        return self == p or self == q
+    
     def is_collinear(self, p: 'Point', q: 'Point') -> bool:
         return (min(p.x,q.x) <= self.x <= max(p.x,q.x)) and (min(p.y,q.y) <= self.y <= max(p.y,q.y))
+    
+    def is_strictly_collinear(self, p: 'Point', q: 'Point') -> bool:
+        return self.is_collinear(p,q) and not self.is_endpoint(p,q)
+    
+    def parallel_axis(self, other: 'Point') -> bool:
+        return self.x == other.x or self.y == other.y
+    
+    def _to_manim(self) -> np.ndarray:
+        return np.array([self.x, self.y, 0])
 
 def lines_intersect(p1: Point, q1: Point, p2: Point, q2: Point) -> bool:
     def orientation(p: Point, q: Point, r: Point) -> int:
@@ -144,6 +171,24 @@ def line_intersects_square(p: Point, q: Point, square: LRTB) -> bool:
         if lines_intersect(p, q, edge[0], edge[1]): return True
 
     return False
+
+def line_intersects_polygon(p: Point, q: Point, polygon: List[Point]):
+    '''Check whether a line intersects a polygon.'''
+    for edge in polygon:
+        p1,q1 = edge
+        if lines_intersect(p, q, p1, q1):
+            return True
+    return False
+
+def lines_parallel(p1: Point, q1: Point, p2: Point, q2: Point) -> bool:
+    dx1, dy1 = q1 - p1
+    dx2, dy2 = q2 - p2
+
+    # avoid 0 division
+    if dx1 == 0 and dx2 == 0: return True
+    if dx1 == 0 or dx2 == 0: return False
+
+    return (dy1/dx1) - (dy2/dx2) < EPSILON
 
 
 class Timestamp:
