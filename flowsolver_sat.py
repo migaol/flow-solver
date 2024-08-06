@@ -375,3 +375,8 @@ class PuzzleRect(Puzzle):
             eset.add(evar)
             if print_clauses: print(r1, c1, r2, c2, evar, self._parse_var_edge(evar, as_str=True))
         print(f"edge size:{len(eset)} / expected:{(self.rows-1)*self.cols + (self.cols-1)*self.rows}")
+
+if __name__ == '__main__':
+    puzzle = PuzzleRect('puzzle.txt')
+    print(puzzle)
+    puzzle.solve_puzzle(print_soln=True, verbose=True)
