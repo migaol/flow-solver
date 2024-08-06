@@ -235,5 +235,6 @@ def print_break(s: str) -> None:
 
 def imgshow(winname: str, mat: np.ndarray) -> None:
     cv2.imshow(winname, mat)
+    # cv2.imwrite(os.path.join('temp', f'{winname}.png'), mat)
     cv2.waitKey(0)
     cv2.destroyAllWindows()

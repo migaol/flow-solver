@@ -139,6 +139,7 @@ class FlowBot:
         ts.add('Screenshot')
 
         puzzle_img_gray = cv2.cvtColor(self.puzzle_img, cv2.COLOR_RGB2GRAY)
+        if show_imgs: imgshow('Gray', puzzle_img_gray)
         self.set_puzzle_dims(puzzle_img_gray, verbose=verbose, show_imgs=show_imgs)
         ts.add('Get puzzle dimensions')
 
@@ -608,6 +609,6 @@ class FlowBot:
 
 if __name__ == '__main__':
     bot = FlowBot(verbose=False)
-    # bot.solve_puzzle(verbose=False, show_imgs=False)
+    bot.solve_puzzle(verbose=False, show_imgs=False)
     # bot.solve_series(verbose=False, show_imgs=False, show_ts=True)
-    bot.solve_time_trial(duration=TTDuration._30SEC, verbose=False, show_ts=True)
+    # bot.solve_time_trial(duration=TTDuration._30SEC, verbose=False, show_ts=True)

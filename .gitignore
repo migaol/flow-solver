@@ -7,3 +7,7 @@ puzzle.png
 trimmed_puzzle.png
 
 media/*
+
+tests/scripts/*
+
+temp/*
