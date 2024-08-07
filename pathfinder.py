@@ -29,7 +29,7 @@ class Pathfinder:
         half_cell = (half_size,half_size)
 
         e_radius = half_size * pct_size
-        v_radius = half_size * (pct_size - 0.1)
+        v_radius = half_size * (pct_size - 0.01)
         d_radius = v_radius - e_radius
 
         src_mid = path[0]*cell_size + half_cell
@@ -89,11 +89,13 @@ class Pathfinder:
         self.V, self.O = V, O
         self.S, self.T = S, T
 
-    def get_neighbors(self, v: Pt) -> List[Pt]:
+    def get_neighbors(self, v: Pt, visited: Set[Pt] = {}) -> List[Pt]:
         neighbors = []
         for u in self.V:
-            if u == v or u in self.S: continue
+            # check visited here before border intersection because the latter is expensive
+            if u == v or u in self.S or u in visited: continue
             if not line_intersects_polygon(v, u, list(self.O)): neighbors.append(u)
+            # don't need to cache; each (u,v) line-border intersection is calculated at most once
         # print(f"neighbors {v} : {neighbors}")
         return neighbors
 
@@ -108,10 +110,9 @@ class Pathfinder:
 
             if current_point in end_points: return path
 
-            for neighbor in self.get_neighbors(current_point):
-                if neighbor not in visited:
-                    visited.add(neighbor)
-                    q.append((neighbor, path + [neighbor]))
+            for neighbor in self.get_neighbors(current_point, visited):
+                visited.add(neighbor)
+                q.append((neighbor, path + [neighbor]))
 
         return []
 

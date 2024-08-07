@@ -10,4 +10,6 @@ media/*
 
 tests/scripts/*
 
-temp/*
+puzzle_processing/*
+
+puzzle_logs/*

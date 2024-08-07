@@ -204,6 +204,12 @@ class Timestamp:
         self.ts.append((name, now - self.prev))
         self.prev = now
 
+    def get_t(self, name: str = None) -> float:
+        '''Get timestamp entry.  If no name is specified, then get the sum of all existing entries.'''
+        if not name: return sum(t for _,t in self.ts)
+        for n,t in self.ts:
+            if n == name: return t
+
     def to_str(self) -> str:
         max_name_length = max(len(name) for name,_ in self.ts)
         total_time = sum(t for _,t in self.ts)
@@ -214,13 +220,6 @@ class Timestamp:
     
     def get_elapsed(self) -> float:
         return time.time() - self.start
-
-def exit_on_keypress(keyname: str) -> Callable:
-    def callback(event):
-        if event.name == keyname:
-            print("exited by key press")
-            os._exit(1)
-    return callback
 
 def pct_diff(a: float, b: float) -> float:
     '''Percent distance.'''
@@ -235,6 +234,6 @@ def print_break(s: str) -> None:
 
 def imgshow(winname: str, mat: np.ndarray) -> None:
     cv2.imshow(winname, mat)
-    # cv2.imwrite(os.path.join('temp', f'{winname}.png'), mat)
+    # cv2.imwrite(os.path.join('puzzle_processing', f'{winname}.png'), mat)
     cv2.waitKey(0)
     cv2.destroyAllWindows()

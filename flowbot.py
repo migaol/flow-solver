@@ -1,5 +1,5 @@
 import Quartz, AppKit, screeninfo
-import os, sys
+import os, sys, shutil
 from mss import mss
 import cv2
 import numpy as np
@@ -27,15 +27,53 @@ class WaitTime(Enum):
     LARGE_PUZZLE_LOAD_TT = 0.505 + TEPSILON
     NEXT_LEVEL_BUTTON = 0.1 + TEPSILON
 
-#TODO add puzzle logging
-# switch mouse path method for denser grids
+class PuzzleLogger:
+    def __init__(self, save_dir: str, fext='.jpg') -> None:
+        if os.path.exists(save_dir): shutil.rmtree(save_dir)
+        os.makedirs(save_dir)
+        self.save_dir = save_dir
+        self.ext = fext
+        self.images = {}
+
+    def add_image(self, img: np.ndarray, fname: str, paths: List[List[Point]] = None, instant_save=False) -> None:
+        idx = len(self.images)+1
+        self.images[idx] = (img, fname, paths)
+        if instant_save: cv2.imwrite(os.path.join(self.save_dir, f'{idx}-{fname}{self.ext}'), img)
+
+    def draw_paths_coords(self, img: np.ndarray, paths: List[List[Point]]) -> None:
+        for path in paths:
+            if not path: continue
+            x0,y0 = path[0].unpack()
+            for p1 in path[1:]:
+                x1,y1 = p1.unpack()
+                cv2.line(img, (x0,y0), (x1,y1), Colors.WHITE.value, 3)
+                cv2.circle(img, (x1,y1), 5, Colors.GRAY.value, 5)
+                x0,y0 = x1,y1
+        return img
+
+    def save_all_images(self) -> None:
+        for idx in self.images:
+            img, fname, paths = self.images[idx]
+            if paths: img = self.draw_paths_coords(img, paths)
+            cv2.imwrite(os.path.join(self.save_dir, f'{idx}-{fname}{self.ext}'), img)
+
 class FlowBot:
     BASE_TOP_MARGIN = 28 # height of the title bar
-    def __init__(self, verbose=False) -> None:
+    def __init__(self, verbose=False, log_puzzles=False) -> None:
+        self.log_puzzles = bool(log_puzzles)
+        if self.log_puzzles: self.logger = PuzzleLogger(log_puzzles)
         self.window_bbox = FlowBot.get_window("Flow", verbose=verbose)
         if not self.window_bbox: sys.exit()
         self.monitor_w, self.monitor_h = FlowBot.get_monitor(verbose=verbose)
-        keyboard.hook(exit_on_keypress('esc'))
+        keyboard.hook(self.exit_on_keypress('esc'))
+
+    def exit_on_keypress(self, keyname: str) -> Callable:
+        def callback(event):
+            if event.name == keyname:
+                print("Exited by key press")
+                if self.log_puzzles: self.logger.save_all_images()
+                os._exit(1)
+        return callback
 
     def wait_key_click(self, puzzle_load_time: WaitTime, move_to_window=True) -> None:
         '''Wait for a key press, then click (and pause for the puzzle to load).
@@ -109,6 +147,12 @@ class FlowBot:
             ts_puzzle.add('Read and parse puzzle')
 
             soln_grid = self.puzzle.solve_puzzle()
+            if not soln_grid:
+                print("There was probably an error reading the puzzle, or no puzzle was found.")
+                if self.log_puzzles:
+                    self.logger.add_image(self.puzzle_img, f'failed')
+                    self.logger.save_all_images()
+                os._exit(1)
             ts_puzzle.add('Solve puzzle')
 
             paths = [self.find_path(soln_grid, terminals[i], i, verbose=verbose) for i in self.puzzle.iter_colors()]
@@ -120,6 +164,7 @@ class FlowBot:
                 self.drag_cursor_coords(clr_path, duration=0, pause=False, verbose=verbose)
             ts_puzzle.add('Drag mouse')
 
+            if self.log_puzzles: self.logger.add_image(self.puzzle_img, f'{ts_puzzle.get_t('Drag mouse'):.4f}', path_coords)
             if show_ts:
                 print(ts_puzzle.to_str())
                 print(f"Total elapsed: {ts_agg.get_elapsed():.4f}")
@@ -127,6 +172,12 @@ class FlowBot:
             puzzle_wait = WaitTime.PUZZLE_LOAD_TT if self.puzzle.n_cells < 40 else WaitTime.LARGE_PUZZLE_LOAD_TT
             pag.sleep(puzzle_wait.value)
 
+        if self.log_puzzles: self.logger.save_all_images()
+
+    def solve_single(self, verbose=False, show_imgs=False, show_ts=True) -> None:
+        '''Solve a single puzzle.  Wrapper for `solve_puzzle` and logs puzzles at the end, if necessary.'''
+        self.solve_puzzle(verbose=verbose, show_imgs=show_imgs, show_ts=show_ts)
+        if self.log_puzzles: self.logger.save_all_images()
 
     def solve_puzzle(self, verbose=False, show_imgs=False, show_ts=True) -> Timestamp:
         '''Solve a single puzzle.'''
@@ -152,6 +203,12 @@ class FlowBot:
         ts.add('Read and parse puzzle')
 
         soln_grid = self.puzzle.solve_puzzle(verbose=verbose)
+        if not soln_grid:
+            print("There was probably an error reading the puzzle, or no puzzle was found.")
+            if self.log_puzzles:
+                self.logger.add_image(self.puzzle_img, f'failed')
+                self.logger.save_all_images()
+            os._exit(1)
         ts.add('Solve puzzle')
 
         paths = [self.find_path(soln_grid, terminals[i], i, verbose=verbose) for i in self.puzzle.iter_colors()]
@@ -166,6 +223,7 @@ class FlowBot:
             self.drag_cursor_coords(clr_path, duration=0, pause=False, verbose=verbose)
         ts.add('Drag mouse')
 
+        if self.log_puzzles: self.logger.add_image(self.puzzle_img, f'{ts.get_t('Drag mouse'):.4f}', path_coords)
         if show_ts: print(ts.to_str())
         return ts
     
@@ -531,7 +589,7 @@ class FlowBot:
     
     def merge_path_coords(self, path: List[Coord], verbose=False) -> List[Coord]:
         '''Merge a direction path into a minimal number of screen coordinates in the path.'''
-        pf = Pathfinder(path, self.cell_size, pct_size=0.6)
+        pf = Pathfinder(path, self.cell_size, pct_size=0.67)
         path_coords = pf.find_path()
         path_coords = [p.inverted() for p in path_coords]
         if verbose: print(path_coords)
@@ -562,13 +620,6 @@ class FlowBot:
                 cv2.circle(img, (x1,y1), 5, (128,128,128), 5)
                 x0,y0 = x1,y1
         imgshow('Path', img)
-
-    def cell_to_square(self, r: int, c: int, rel_grid=False, diam_pct=0.85) -> LRTB:
-        '''Convert cell coordinate to screen square, with side length `diam_pct` of `cell_size`.
-        A smaller side length avoids pixel errors as part of rounding.'''
-        cx,cy = self.cell_to_screen(r,c, rel_grid=rel_grid)
-        half_side = int((self.cell_size * diam_pct)//2)
-        return LRTB(cx-half_side, cx+half_side, cy-half_side, cy+half_side)
 
     def cell_to_screen(self, r: int | Coord, c: int = None, rel_grid=False) -> Coord:
         '''Convert cell coordinate to screen coordinates.
@@ -608,7 +659,7 @@ class FlowBot:
 
 
 if __name__ == '__main__':
-    bot = FlowBot(verbose=False)
-    bot.solve_puzzle(verbose=False, show_imgs=False)
+    bot = FlowBot(verbose=False, log_puzzles='puzzle_logs') # 'puzzle_logs'
+    # bot.solve_single(verbose=False, show_imgs=False, show_ts=True)
     # bot.solve_series(verbose=False, show_imgs=False, show_ts=True)
-    # bot.solve_time_trial(duration=TTDuration._30SEC, verbose=False, show_ts=True)
+    bot.solve_time_trial(duration=TTDuration._30SEC, verbose=False, show_ts=True)
