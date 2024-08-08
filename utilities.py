@@ -1,20 +1,21 @@
-import os
+'''General utility classes and functions.'''
+
 import time
 import numpy as np
 import cv2
 from enum import Enum
-import keyboard
 from typing import TypeVar, Any, Union, List, Tuple, Callable
 
 T = TypeVar('T')
 Grid = List[List[T]] # 2D array
 Clause = List[int] # List of disjunction of literals
 ColorID = int # int representation of a color
-PuzzleState = Grid | Any # Any puzzle state representation
+PuzzleState = Union[Grid, Any] # Any puzzle state representation
 
+Numeric = Union[int, float] # any numeric value
 PxColor = Tuple[int, int, int] # RGB or BGR
-Coord = Tuple[int, int] # 2D coordinate
-Line = Tuple[int, int, int, int] # x1, y1, x2, y2
+Coord = Tuple[Numeric, Numeric] # 2D coordinate
+Line = Tuple[Numeric, Numeric, Numeric, Numeric] # x1, y1, x2, y2
 
 EPSILON = 1e-5
 
@@ -34,7 +35,8 @@ class Colors(Enum):
     ORANGE =     (  0, 165, 255)
     PURPLE =     (128,   0, 128)
 
-class LRTB: # left, right, top, bottom (extrema)
+class LRTB:
+    '''Store left, right, top, and bottom.  Functions as a set of extrema.'''
     def __init__(self, l: int, r: int, t: int, b: int) -> None:
         self.l, self.r, self.t, self.b = l,r,t,b
 
@@ -44,7 +46,8 @@ class LRTB: # left, right, top, bottom (extrema)
     def to_xywh(self) -> 'XYWH':
         return XYWH(self.l, self.t, self.r - self.l, self.b - self.t)
 
-class XYWH: # x, y, width, height (bounding box)
+class XYWH:
+    '''Store top left corner (x,y), width, and height.  Functions as a bounding box.'''
     def __init__(self, x: int, y: int, w: int, h: int) -> None:
         self.x, self.y, self.w, self.h = x,y,w,h
 
@@ -70,33 +73,34 @@ class XYWH: # x, y, width, height (bounding box)
         self.w -= 2*px
         self.h -= 2*px
 
-class Point:
-    def __init__(self, x: int | Coord, y: int = None) -> None:
-        if y is None: x,y = x # for single param inputs, assume it is a coord tuple
+class Vect2:
+    '''2D vector.'''
+    def __init__(self, x: Numeric, y: Numeric) -> None:
         self.x, self.y = x,y
 
+    @classmethod
+    def coord(cls, tuple: Coord) -> 'Vect2':
+        return cls(tuple[0], tuple[1])
+
     def __repr__(self) -> str:
-        return f"Point({self.x},{self.y})"
+        return f"({self.x:.4f},{self.y:.4f})"
     
-    def __add__(self, other: Union['Point', tuple]) -> 'Point':
-        if isinstance(other, Point):
-            return Point(self.x + other.x, self.y + other.y)
+    def __add__(self, other: Union['Vect2', Coord]) -> 'Vect2':
+        if isinstance(other, Vect2):
+            return Vect2(self.x + other.x, self.y + other.y)
         elif isinstance(other, tuple) and len(other) == 2:
-            return Point(self.x + other[0], self.y + other[1])
+            return Vect2(self.x + other[0], self.y + other[1])
         return NotImplemented
 
-    def __sub__(self, other: Union['Point', tuple]) -> 'Point':
-        if isinstance(other, Point):
-            return Point(self.x - other.x, self.y - other.y)
+    def __sub__(self, other: Union['Vect2', Coord]) -> 'Vect2':
+        if isinstance(other, Vect2):
+            return Vect2(self.x - other.x, self.y - other.y)
         elif isinstance(other, tuple) and len(other) == 2:
-            return Point(self.x - other[0], self.y - other[1])
+            return Vect2(self.x - other[0], self.y - other[1])
         return NotImplemented
     
-    def __mul__(self, scalar: float | int) -> 'Point':
-        if isinstance(scalar, float):
-            return Point(self.x * scalar, self.y * scalar)
-        if isinstance(scalar, int):
-            return Point(self.x * scalar, self.y * scalar)
+    def __mul__(self, scalar: Numeric) -> 'Vect2':
+        if isinstance(scalar, Numeric): return Vect2(self.x * scalar, self.y * scalar)
         return NotImplemented
     
     def __getitem__(self, idx: int) -> int:
@@ -108,12 +112,11 @@ class Point:
         return hash((self.x, self.y))
     
     def __eq__(self, other: object) -> bool:
-        if not isinstance(other, Point):
-            return NotImplemented
-        return self.x == other.x and self.y == other.y
+        if not isinstance(other, Vect2): return NotImplemented
+        return abs(self.x - other.x) < EPSILON and abs(self.y - other.y) < EPSILON
     
-    def inverted(self) -> 'Point':
-        return Point(self.y, self.x)
+    def inverted(self) -> 'Vect2':
+        return Vect2(self.y, self.x)
     
     def unpack(self) -> Coord:
         return int(self.x), int(self.y)
@@ -121,75 +124,20 @@ class Point:
     def in_square(self, square: LRTB) -> bool:
         return square.l <= self.x <= square.r and square.t <= self.y <= square.b
     
-    def is_endpoint(self, p: 'Point', q: 'Point') -> bool:
+    def is_endpoint(self, p: 'Vect2', q: 'Vect2') -> bool:
         return self == p or self == q
     
-    def is_collinear(self, p: 'Point', q: 'Point') -> bool:
+    def is_collinear(self, p: 'Vect2', q: 'Vect2') -> bool:
         return (min(p.x,q.x) <= self.x <= max(p.x,q.x)) and (min(p.y,q.y) <= self.y <= max(p.y,q.y))
     
-    def is_strictly_collinear(self, p: 'Point', q: 'Point') -> bool:
+    def is_strictly_collinear(self, p: 'Vect2', q: 'Vect2') -> bool:
         return self.is_collinear(p,q) and not self.is_endpoint(p,q)
     
-    def parallel_axis(self, other: 'Point') -> bool:
+    def parallel_axis(self, other: 'Vect2') -> bool:
         return self.x == other.x or self.y == other.y
     
     def _to_manim(self) -> np.ndarray:
         return np.array([self.x, self.y, 0])
-
-def lines_intersect(p1: Point, q1: Point, p2: Point, q2: Point) -> bool:
-    def orientation(p: Point, q: Point, r: Point) -> int:
-        '''Check whether 3 points are CW, CCW, or COL'''
-        val = ((q.y-p.y) * (r.x-q.x)) - ((q.x-p.x) * (r.y-q.y))
-        if val > 0: return 1 # clockwise
-        elif val < 0: return -1 # counter-clockwise
-        elif val == 0: return 0 # collinear
-
-    o1 = orientation(p1, q1, p2)
-    o2 = orientation(p1, q1, q2)
-    o3 = orientation(p2, q2, p1)
-    o4 = orientation(p2, q2, q1)
-
-    if o1 != o2 and o3 != o4: return True # general case
-    if o1 == 0 and p2.is_collinear(p1, q1): return True
-    if o2 == 0 and q2.is_collinear(p1, q1): return True
-    if o3 == 0 and p1.is_collinear(p2, q2): return True
-    if o4 == 0 and q1.is_collinear(p2, q2): return True
-    return False
-
-def line_intersects_square(p: Point, q: Point, square: LRTB) -> bool:
-    '''Check if line segment pq intersects a square.'''
-    if p.in_square(square) or q.in_square(square): return True # endpoints in square
-
-    square_edges = [
-        (Point(square.l, square.t), Point(square.l, square.b)), # left
-        (Point(square.l, square.b), Point(square.r, square.b)), # bottom
-        (Point(square.r, square.b), Point(square.r, square.t)), # right
-        (Point(square.r, square.t), Point(square.l, square.t)) # top
-    ]
-
-    for edge in square_edges:
-        if lines_intersect(p, q, edge[0], edge[1]): return True
-
-    return False
-
-def line_intersects_polygon(p: Point, q: Point, polygon: List[Point]):
-    '''Check whether a line intersects a polygon.'''
-    for edge in polygon:
-        p1,q1 = edge
-        if lines_intersect(p, q, p1, q1):
-            return True
-    return False
-
-def lines_parallel(p1: Point, q1: Point, p2: Point, q2: Point) -> bool:
-    dx1, dy1 = q1 - p1
-    dx2, dy2 = q2 - p2
-
-    # avoid 0 division
-    if dx1 == 0 and dx2 == 0: return True
-    if dx1 == 0 or dx2 == 0: return False
-
-    return (dy1/dx1) - (dy2/dx2) < EPSILON
-
 
 class Timestamp:
     '''Record labeled timestamps.'''

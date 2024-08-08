@@ -1,18 +1,18 @@
 from utilities import *
-import matplotlib.pyplot as plt
 from typing import Set
 from manim import *
-from utilities import Point as Pt
+from utilities import Vect2
+import lines
 from collections import deque
 
 class Pathfinder:
     def __init__(self, path: List[Coord], cell_size: float, pct_size: float) -> None:
-        self.path = [Pt(x,y) for x,y in path]
+        self.path = [Vect2(x,y) for x,y in path]
         self.cell_size = cell_size
         self.pct_size = pct_size
         self.create_vertices(self.path, cell_size, pct_size)
 
-    def find_corners(self, path: List[Pt]) -> List[int]:
+    def find_corners(self, path: List[Vect2]) -> List[int]:
         corners = []
         prev_dir = path[1] - path[0]
         for i in range(1, len(path) - 1):
@@ -22,9 +22,9 @@ class Pathfinder:
         
         return corners
 
-    def create_vertices(self, path: List[Pt], cell_size: float, pct_size: float):
-        V: Set[Pt] = set()
-        O: Set[Pt] = set()
+    def create_vertices(self, path: List[Vect2], cell_size: float, pct_size: float):
+        V: Set[Vect2] = set()
+        O: Set[Vect2] = set()
         half_size = cell_size/2
         half_cell = (half_size,half_size)
 
@@ -38,7 +38,7 @@ class Pathfinder:
             V.add(cell*cell_size + half_cell)
 
         # source vertices/edges
-        src_dir: Pt = path[1] - path[0]
+        src_dir: Vect2 = path[1] - path[0]
         src_o1 = path[0]*cell_size + half_cell - src_dir*e_radius - src_dir.inverted()*e_radius
         src_o2 = path[0]*cell_size + half_cell - src_dir*e_radius + src_dir.inverted()*e_radius
         src_i1 = path[0]*cell_size + half_cell + src_dir*e_radius - src_dir.inverted()*e_radius
@@ -56,9 +56,9 @@ class Pathfinder:
         # intermediate vertices/edges
         prev1, prev2 = src_o1, src_o2
         for i, prev_dir, curr_dir in self.find_corners(path):
-            curr: Pt = path[i]
-            curr_i: Pt = curr*cell_size + half_cell - prev_dir*e_radius + curr_dir*e_radius # inner
-            curr_o: Pt = curr*cell_size + half_cell + prev_dir*e_radius - curr_dir*e_radius # outer
+            curr: Vect2 = path[i]
+            curr_i: Vect2 = curr*cell_size + half_cell - prev_dir*e_radius + curr_dir*e_radius # inner
+            curr_o: Vect2 = curr*cell_size + half_cell + prev_dir*e_radius - curr_dir*e_radius # outer
 
             if curr_i.parallel_axis(prev1):   O.update([(prev1, curr_i), (prev2, curr_o)])
             elif curr_i.parallel_axis(prev2): O.update([(prev2, curr_i), (prev1, curr_o)])
@@ -70,7 +70,7 @@ class Pathfinder:
             ])
         
         # target vertices/edges
-        tgt_dir: Pt = path[-2] - path[-1]
+        tgt_dir: Vect2 = path[-2] - path[-1]
         tgt_o1 = path[-1]*cell_size + half_cell - tgt_dir*e_radius - tgt_dir.inverted()*e_radius
         tgt_o2 = path[-1]*cell_size + half_cell - tgt_dir*e_radius + tgt_dir.inverted()*e_radius
         T = [
@@ -89,21 +89,20 @@ class Pathfinder:
         self.V, self.O = V, O
         self.S, self.T = S, T
 
-    def get_neighbors(self, v: Pt, visited: Set[Pt] = {}) -> List[Pt]:
+    def get_neighbors(self, v: Vect2, visited: Set[Vect2] = {}) -> List[Vect2]:
         neighbors = []
         for u in self.V:
             # check visited here before border intersection because the latter is expensive
             if u == v or u in self.S or u in visited: continue
-            if not line_intersects_polygon(v, u, list(self.O)): neighbors.append(u)
+            if not lines.intersects_polygon(v, u, list(self.O)): neighbors.append(u)
             # don't need to cache; each (u,v) line-border intersection is calculated at most once
-        # print(f"neighbors {v} : {neighbors}")
         return neighbors
 
-    def find_path(self) -> List[Pt]:
+    def find_path(self) -> List[Vect2]:
         start_points = self.S
         end_points = self.T
         visited = set()
-        q = deque([(pt, [pt]) for pt in start_points])
+        q = deque([(Vect2, [Vect2]) for Vect2 in start_points])
 
         while q:
             current_point, path = q.popleft()
@@ -118,7 +117,7 @@ class Pathfinder:
 
 
 class VizPathfinder(Scene):
-    def construct(self, path: List[Pt] = [(2,0),(1,0),(1,1),(1,2),(1,3)],
+    def construct(self, path: List[Vect2] = [(2,0),(1,0),(1,1),(1,2),(1,3)],
                   rows: int = 5, cols: int = 5, cell_size: float = 50, pct_size: float = 0.8):
         self.camera.frame_width, self.camera.frame_height = cols*cell_size, rows*cell_size
 
@@ -129,10 +128,9 @@ class VizPathfinder(Scene):
         print(soln)
 
         half_cell = cell_size/2
-        def tlo(pt: np.ndarray):
-            x,y,z = pt[:3]
+        def tlo(Vect2: np.ndarray):
+            x,y,z = Vect2[:3]
             return np.array([x - self.camera.frame_width/2, -y + self.camera.frame_height/2, z])
-            # return np.array([x,y,z])
 
         # temp
         temp = VGroup()
@@ -182,8 +180,6 @@ if __name__ == '__main__':
     pct_size = 0.9
 
     pf = Pathfinder(path, cell_size, pct_size)
-    # print(pf.V)
-    # print(pf.O)
     soln = pf.find_path()
     print(soln)
 

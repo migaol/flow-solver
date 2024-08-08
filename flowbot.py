@@ -4,6 +4,7 @@ from mss import mss
 import cv2
 import numpy as np
 import pyautogui as pag
+import keyboard
 from enum import Enum
 from typing import List, Tuple, Callable
 from flowsolver_sat import PuzzleRect
@@ -18,29 +19,32 @@ class TTDuration(Enum):
     _2MIN = 2*60
     _4MIN = 4*60
 
-TEPSILON = 1e-4
 class WaitTime(Enum):
     '''Wait duration constants.'''
+    TEPSILON = 1e-4
     PUZZLE_LOAD_SERIES_INIT = 0.5 + TEPSILON
     PUZZLE_LOAD_SERIES = 0.52
     PUZZLE_LOAD_TT = 0.50 + TEPSILON
-    LARGE_PUZZLE_LOAD_TT = 0.505 + TEPSILON
+    LARGE_PUZZLE_LOAD_TT = 0.505 + TEPSILON # large puzzles take slightly longer to load
     NEXT_LEVEL_BUTTON = 0.1 + TEPSILON
 
 class PuzzleLogger:
+    '''Puzzle logger which puzzle solutions to a folder.'''
     def __init__(self, save_dir: str, fext='.jpg') -> None:
-        if os.path.exists(save_dir): shutil.rmtree(save_dir)
-        os.makedirs(save_dir)
+        if os.path.exists(save_dir): shutil.rmtree(save_dir) # clear old logged puzzles
+        os.makedirs(save_dir) # shutil.rmtree deletes the root as well, so re-mkdir it
         self.save_dir = save_dir
         self.ext = fext
         self.images = {}
 
-    def add_image(self, img: np.ndarray, fname: str, paths: List[List[Point]] = None, instant_save=False) -> None:
+    def add_image(self, img: np.ndarray, fname: str, paths: List[List[Vect2]] = None, instant_save=False) -> None:
+        '''Add an image to log.'''
         idx = len(self.images)+1
         self.images[idx] = (img, fname, paths)
         if instant_save: cv2.imwrite(os.path.join(self.save_dir, f'{idx}-{fname}{self.ext}'), img)
 
-    def draw_paths_coords(self, img: np.ndarray, paths: List[List[Point]]) -> None:
+    def draw_paths_coords(self, img: np.ndarray, paths: List[List[Vect2]]) -> None:
+        '''Local version of the FlowBot equivalent.  Drawing takes time so this can be saved for after solving puzzles.'''
         for path in paths:
             if not path: continue
             x0,y0 = path[0].unpack()
@@ -52,6 +56,7 @@ class PuzzleLogger:
         return img
 
     def save_all_images(self) -> None:
+        '''If necessary, draw paths on the images, then save.'''
         for idx in self.images:
             img, fname, paths = self.images[idx]
             if paths: img = self.draw_paths_coords(img, paths)
@@ -62,12 +67,14 @@ class FlowBot:
     def __init__(self, verbose=False, log_puzzles=False) -> None:
         self.log_puzzles = bool(log_puzzles)
         if self.log_puzzles: self.logger = PuzzleLogger(log_puzzles)
+
         self.window_bbox = FlowBot.get_window("Flow", verbose=verbose)
         if not self.window_bbox: sys.exit()
         self.monitor_w, self.monitor_h = FlowBot.get_monitor(verbose=verbose)
-        keyboard.hook(self.exit_on_keypress('esc'))
+        keyboard.hook(self._exit_on_keypress('esc'))
 
-    def exit_on_keypress(self, keyname: str) -> Callable:
+    def _exit_on_keypress(self, keyname: str) -> Callable:
+        '''Exit the bot on the specified key press.  Log puzzles if necessary.'''
         def callback(event):
             if event.name == keyname:
                 print("Exited by key press")
@@ -75,7 +82,7 @@ class FlowBot:
                 os._exit(1)
         return callback
 
-    def wait_key_click(self, puzzle_load_time: WaitTime, move_to_window=True) -> None:
+    def _wait_key_click(self, puzzle_load_time: WaitTime, move_to_window=True) -> None:
         '''Wait for a key press, then click (and pause for the puzzle to load).
         Should be used to position the mouse before starting.'''
         if move_to_window: pag.moveTo(*self.window_bbox.center(), duration=0, _pause=False)
@@ -83,7 +90,7 @@ class FlowBot:
         pag.click(duration=0, _pause=False)
         pag.sleep(puzzle_load_time.value)
 
-    def click_next_level(window_bbox: XYWH) -> None:
+    def _click_next_level(window_bbox: XYWH) -> None:
         '''Click on the 'next level' button.  Alignment is always in the center in the grid window,
         assuming that ads are disabled (by turning off internet).'''
         pag.sleep(WaitTime.NEXT_LEVEL_BUTTON.value)
@@ -93,32 +100,32 @@ class FlowBot:
     def solve_series(self, verbose=False, show_imgs=False, show_ts=True) -> None:
         '''Solve several puzzles in a row, proceeding to the next puzzle upon completing one.'''
 
-        self.wait_key_click(WaitTime.PUZZLE_LOAD_SERIES_INIT)
+        self._wait_key_click(WaitTime.PUZZLE_LOAD_SERIES_INIT)
 
         ts_agg = []
         it = 0
         while True:
             it += 1
             if verbose or show_ts: print_break(f"Iter {it}")
-            puzzle_ts = self.solve_puzzle(verbose=verbose, show_imgs=show_imgs, show_ts=show_ts)
+            puzzle_ts = self._solve_puzzle(verbose=verbose, show_imgs=show_imgs, show_ts=show_ts)
             ts_agg.append(puzzle_ts)
 
-            FlowBot.click_next_level(self.window_bbox)
+            FlowBot._click_next_level(self.window_bbox)
 
     def solve_time_trial(self, duration=TTDuration._30SEC, verbose=False, show_ts=True) -> None:
-        '''Solve subsequent puzzles in a time trial.
-        In the interest of time efficiency, verbose is False for most methods, and showing images is disabled.'''
+        '''Solve subsequent puzzles in a time trial. In the interest of time efficiency,
+        verbose is False for most methods, and showing images and puzzle logging is disabled.'''
         
         try: TTDuration(duration)
         except ValueError: raise ValueError(f"Invalid duration:[{duration.value}]")
         duration = duration.value
         if verbose: print(f"Started time trial for duration {duration} sec.")
 
-        self.wait_key_click(WaitTime.PUZZLE_LOAD_TT)
+        self._wait_key_click(WaitTime.PUZZLE_LOAD_TT)
         pag.moveTo(1,1, duration=0, _pause=False) # move mouse away from screenshot area
         ts_agg = Timestamp()
 
-        self.puzzle_img = FlowBot.screen_capture(self.window_bbox, save_name='puzzle.png' if verbose else False)
+        self.puzzle_img = FlowBot.screen_capture(self.window_bbox, save_name=False)
         ts_agg.add('Initial screenshot')
 
         puzzle_img_gray = cv2.cvtColor(self.puzzle_img, cv2.COLOR_RGB2GRAY)
@@ -135,8 +142,8 @@ class FlowBot:
             it += 1
             if verbose or show_ts: print_break(f"Iter {it}")
 
-            if it > 1:
-                self.puzzle_img = FlowBot.screen_capture(puzzle_bbox, save_name='puzzle.png' if verbose else False)
+            if it > 1: # screen capture only the board area
+                self.puzzle_img = FlowBot.screen_capture(puzzle_bbox, save_name=False)
                 ts_puzzle.add('Screenshot')
 
             self.puzzle_img = FlowBot.resize_half(self.puzzle_img)
@@ -149,9 +156,6 @@ class FlowBot:
             soln_grid = self.puzzle.solve_puzzle()
             if not soln_grid:
                 print("There was probably an error reading the puzzle, or no puzzle was found.")
-                if self.log_puzzles:
-                    self.logger.add_image(self.puzzle_img, f'failed')
-                    self.logger.save_all_images()
                 os._exit(1)
             ts_puzzle.add('Solve puzzle')
 
@@ -164,7 +168,6 @@ class FlowBot:
                 self.drag_cursor_coords(clr_path, duration=0, pause=False, verbose=verbose)
             ts_puzzle.add('Drag mouse')
 
-            if self.log_puzzles: self.logger.add_image(self.puzzle_img, f'{ts_puzzle.get_t('Drag mouse'):.4f}', path_coords)
             if show_ts:
                 print(ts_puzzle.to_str())
                 print(f"Total elapsed: {ts_agg.get_elapsed():.4f}")
@@ -172,14 +175,12 @@ class FlowBot:
             puzzle_wait = WaitTime.PUZZLE_LOAD_TT if self.puzzle.n_cells < 40 else WaitTime.LARGE_PUZZLE_LOAD_TT
             pag.sleep(puzzle_wait.value)
 
-        if self.log_puzzles: self.logger.save_all_images()
-
     def solve_single(self, verbose=False, show_imgs=False, show_ts=True) -> None:
-        '''Solve a single puzzle.  Wrapper for `solve_puzzle` and logs puzzles at the end, if necessary.'''
-        self.solve_puzzle(verbose=verbose, show_imgs=show_imgs, show_ts=show_ts)
+        '''Solve a single puzzle.  Wrapper for `_solve_puzzle` and logs puzzles at the end, if necessary.'''
+        self._solve_puzzle(verbose=verbose, show_imgs=show_imgs, show_ts=show_ts)
         if self.log_puzzles: self.logger.save_all_images()
 
-    def solve_puzzle(self, verbose=False, show_imgs=False, show_ts=True) -> Timestamp:
+    def _solve_puzzle(self, verbose=False, show_imgs=False, show_ts=True) -> Timestamp:
         '''Solve a single puzzle.'''
 
         ts = Timestamp()
@@ -212,7 +213,6 @@ class FlowBot:
         ts.add('Solve puzzle')
 
         paths = [self.find_path(soln_grid, terminals[i], i, verbose=verbose) for i in self.puzzle.iter_colors()]
-        # dirs = [None] + [self.coord_to_dirs(i, verbose=verbose) for i in paths] # offset by 1 to match color indices
         path_coords = [None] + [self.merge_path_coords(p, verbose=verbose) for p in paths]
         if show_imgs: self.draw_paths_coords(self.puzzle_img, path_coords)
         ts.add('Compute mouse path')
@@ -314,138 +314,135 @@ class FlowBot:
         '''Get left, right, top, and bottom grid margins, maximum horizontal cells (grid width),
         maximum vertical cells (grid height), and cell size.  All units in display pixels.'''
 
-        img_cropped, bbox = FlowBot.crop_to_board_region(puzzle_img, verbose=verbose, show_imgs=show_imgs)
+        def crop_to_board_region(img_gray: np.ndarray, verbose=False, show_imgs=False) -> Tuple[np.ndarray, XYWH]:
+            '''Crop a puzzle image based on where the grid is found.  Requires a grayscale image input.
+            Returns the cropped board region as a binary thresholded image,
+            and the location of the board relative to the puzzle image. '''
+
+            if verbose: print_break("Crop to board region")
+
+            thresh_k,thresh_c = 3,5
+            img_threshold = img_gray.copy()
+            img_threshold = cv2.adaptiveThreshold(img_threshold, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY_INV, thresh_k, thresh_c)
+            if show_imgs: imgshow(f'Threshold; kernel size:{thresh_k} c:{thresh_c}', img_threshold)
+
+            # dilate to merge duplicate lines
+            img_edges = img_threshold.copy()
+            img_edges = FlowBot._cv2_morph(img_edges, cv2.dilate, 5) # on different resolutions, kernel size may need to change
+            if show_imgs: imgshow('Dilate', img_edges)
+
+            # find contours
+            contours, _ = cv2.findContours(img_edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
+            if show_imgs:
+                img_contours = cv2.cvtColor(img_edges.copy(), cv2.COLOR_GRAY2BGR)
+                cv2.drawContours(img_contours, contours, -1, Colors.RED.value, 3)
+                imgshow(f'Contours: all', img_contours)
+
+            # find largest contour, the board
+            BBOX_SHRINK_PX = 4
+            largest = FlowBot._find_largest_contour(contours)
+            board_bbox = XYWH(*cv2.boundingRect(largest))
+            board_bbox.shrink(BBOX_SHRINK_PX)
+            if verbose: print(f'Board BBox: {board_bbox}')
+            if show_imgs:
+                cv2.drawContours(img_contours, largest, -1, Colors.YELLOW.value, 25)
+                imgshow(f'Contours: largest (corners)', img_contours)
+                FlowBot._cv2_rect_from_loc(img_contours, board_bbox, Colors.GREEN.value, stroke=3)
+                imgshow(f'Board BBox', img_contours)
+
+            img_cropped = img_threshold[board_bbox.y : board_bbox.y+board_bbox.h+1, board_bbox.x : board_bbox.x+board_bbox.w+1]
+            if verbose: print(f"Cropped {board_bbox.h}x{board_bbox.w}; Original {img_gray.shape}")
+            if show_imgs: imgshow('Cropped', img_cropped)
+
+            return img_cropped, board_bbox
+
+        def get_grid_size(img_cropped: np.ndarray, verbose=False, show_imgs=False) -> Tuple[int, int, float]:
+            '''Find grid width, height, cell size.  Assume thresholded binary image input.'''
+
+            if verbose: print_break("Get Grid Size")
+
+            # dilate to merge duplicate lines
+            img_edges = FlowBot._cv2_morph(img_cropped, cv2.dilate, 9) # on different resolutions, kernel size may need to change
+            if show_imgs: imgshow('Dilate', img_edges)
+            img_edges = FlowBot._cv2_morph(img_edges, cv2.erode, 11) # on different resolutions, kernel size may need to change
+            if show_imgs: imgshow('Erode', img_edges)
+
+            # find contours
+            contours, _ = cv2.findContours(np.int32(img_edges), cv2.RETR_FLOODFILL, cv2.CHAIN_APPROX_SIMPLE)
+            if show_imgs:
+                img_contours = cv2.cvtColor(img_edges.copy(), cv2.COLOR_GRAY2BGR)
+                cv2.drawContours(img_contours, contours, -1, Colors.GREEN.value, 1)
+                imgshow(f'Board contours: all', img_contours)
+            if verbose: print(f"Unfiltered contours: {len(contours)}")
+
+            # filter square polygon contours
+            MIN_CONTOUR_AREA = 100 # minimum contour area to be considered; filters noise contours
+            APPROX_EPS_COEFF = 0.05 # epsilon coefficient for cv2.approxPolyDP(); converts noisy cells into squares
+            square_contours = []
+            for contour in contours:
+                epsilon = APPROX_EPS_COEFF * cv2.arcLength(contour, True)
+                approx_poly = cv2.approxPolyDP(contour, epsilon, True)
+                if len(approx_poly) == 4 and cv2.contourArea(contour) > MIN_CONTOUR_AREA: square_contours.append(approx_poly)
+            contours = square_contours
+
+            # group similar-sized contours
+            contour_areas = [cv2.contourArea(contour) for contour in contours]
+            SIMILARITY_THRESH_PCT = 0.15 # percent difference to be considered a similar-sized contour
+            contours_in_group = [False] * len(contours)
+            similar_contours = []
+            for i, contour in enumerate(contours):
+                if contours_in_group[i]: continue
+                similar_group = [i]
+                for j, _ in enumerate(contours):
+                    if i == j or contours_in_group[j]: continue
+                    if pct_diff(contour_areas[i], contour_areas[j]) < SIMILARITY_THRESH_PCT:
+                        similar_group.append(j)
+                        contours_in_group[j] = True
+                similar_contours.append(similar_group)
+                contours_in_group[i] = True
+
+            # show similar contours
+            if verbose:
+                print(f"Filtered contours: {len(contours)}")
+                for i,group in enumerate(similar_contours):
+                    print(f"Group {i} - size:{len(group)} area:{cv2.contourArea(contours[group[0]])}")
+            if show_imgs: 
+                for i,group in enumerate(similar_contours):
+                    color = np.random.randint(128, 255, size=3).tolist()
+                    img_contours = cv2.cvtColor(img_edges.copy(), cv2.COLOR_GRAY2BGR)
+                    for c in group:
+                        cv2.drawContours(img_contours, contours, c, color, 5)
+                    imgshow(f'Contours: groups ({i})', img_contours)
+
+            # find largest group of similar contours
+            cell_contours_idx = np.argmax([len(g) for g in similar_contours])
+            cell_contours = [contours[i] for i in similar_contours[cell_contours_idx]]
+            if verbose: print(f"Largest contour group idx:{cell_contours_idx}; size:{len(similar_contours[cell_contours_idx])}")
+
+            # find left, right, top, bottom bounds of the cell contours
+            cell_bboxes = [cv2.boundingRect(contour) for contour in cell_contours]
+            x_min = min([bbox[0] for bbox in cell_bboxes])
+            y_min = min([bbox[1] for bbox in cell_bboxes])
+            x_max = max([bbox[0] + bbox[2] for bbox in cell_bboxes])
+            y_max = max([bbox[1] + bbox[3] for bbox in cell_bboxes])
+
+            # calculate the number of cells in each row and column
+            cell_width, cell_height = cell_bboxes[0][2:4] # arbitrarily use bottom right box
+            grid_width = (x_max - x_min) // cell_width
+            grid_height = (y_max - y_min) // cell_height
+            # average unrounded grid width & height, then divide by 2 because mac screenshots are higher resolution
+            cell_size = ((x_max-x_min)/grid_width + (y_max-y_min)/grid_height)/2 / 2
+
+            return grid_width, grid_height, cell_size
+
+        img_cropped, bbox = crop_to_board_region(puzzle_img, verbose=verbose, show_imgs=show_imgs)
         self.margins = bbox.to_lrtb(operation = lambda x : x//2)
-        self.grid_width, self.grid_height, self.cell_size =\
-            FlowBot.get_grid_size(img_cropped, verbose=verbose, show_imgs=show_imgs)
+        self.grid_width, self.grid_height, self.cell_size = get_grid_size(img_cropped, verbose=verbose, show_imgs=show_imgs)
         self.grid_tl = (self.window_bbox.x + self.margins.l, self.window_bbox.y + self.margins.t)
         
         if verbose:
             print_break("Puzzle Dimensions")
             print(f"{self.margins}\n{self.grid_width=} {self.grid_height=} {self.cell_size=:.3f}")
-
-    @staticmethod
-    def crop_to_board_region(img_gray: np.ndarray, verbose=False, show_imgs=False) -> Tuple[np.ndarray, XYWH]:
-        '''Crop a puzzle image based on where the grid is found.  Requires a grayscale image input.
-        Returns the cropped board region as a binary thresholded image,
-        and the location of the board relative to the puzzle image. '''
-
-        if verbose: print_break("Crop to board region")
-
-        thresh_k,thresh_c = 3,5
-        img_threshold = img_gray.copy()
-        img_threshold = cv2.adaptiveThreshold(img_threshold, 255, cv2.ADAPTIVE_THRESH_MEAN_C, cv2.THRESH_BINARY_INV, thresh_k, thresh_c)
-        if show_imgs: imgshow(f'Threshold; kernel size:{thresh_k} c:{thresh_c}', img_threshold)
-
-        # dilate to merge duplicate lines
-        img_edges = img_threshold.copy()
-        img_edges = FlowBot._cv2_morph(img_edges, cv2.dilate, 5) # on different resolutions, kernel size may need to change
-        if show_imgs: imgshow('Dilate', img_edges)
-
-        # find contours
-        contours, _ = cv2.findContours(img_edges, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        if show_imgs:
-            img_contours = cv2.cvtColor(img_edges.copy(), cv2.COLOR_GRAY2BGR)
-            cv2.drawContours(img_contours, contours, -1, Colors.RED.value, 3)
-            imgshow(f'Contours: all', img_contours)
-
-        # find largest contour, the board
-        BBOX_SHRINK_PX = 4
-        largest = FlowBot._find_largest_contour(contours)
-        board_bbox = XYWH(*cv2.boundingRect(largest))
-        board_bbox.shrink(BBOX_SHRINK_PX)
-        if verbose: print(f'Board BBox: {board_bbox}')
-        if show_imgs:
-            cv2.drawContours(img_contours, largest, -1, Colors.YELLOW.value, 25)
-            imgshow(f'Contours: largest (corners)', img_contours)
-            FlowBot._cv2_rect_from_loc(img_contours, board_bbox, Colors.GREEN.value, stroke=3)
-            imgshow(f'Board BBox', img_contours)
-
-        img_cropped = img_threshold[board_bbox.y : board_bbox.y+board_bbox.h+1, board_bbox.x : board_bbox.x+board_bbox.w+1]
-        if verbose: print(f"Cropped {board_bbox.h}x{board_bbox.w}; Original {img_gray.shape}")
-        if show_imgs: imgshow('Cropped', img_cropped)
-
-        return img_cropped, board_bbox
-    
-    @staticmethod
-    def get_grid_size(img_cropped: np.ndarray, verbose=False, show_imgs=False) -> Tuple[int, int, float]:
-        '''Find grid width, height, cell size.  Assume thresholded binary image input.'''
-
-        if verbose: print_break("Get Grid Size")
-
-        # dilate to merge duplicate lines
-        img_edges = FlowBot._cv2_morph(img_cropped, cv2.dilate, 9) # on different resolutions, kernel size may need to change
-        if show_imgs: imgshow('Dilate', img_edges)
-        img_edges = FlowBot._cv2_morph(img_edges, cv2.erode, 11) # on different resolutions, kernel size may need to change
-        if show_imgs: imgshow('Erode', img_edges)
-
-        # find contours
-        contours, _ = cv2.findContours(np.int32(img_edges), cv2.RETR_FLOODFILL, cv2.CHAIN_APPROX_SIMPLE)
-        if show_imgs:
-            img_contours = cv2.cvtColor(img_edges.copy(), cv2.COLOR_GRAY2BGR)
-            cv2.drawContours(img_contours, contours, -1, Colors.GREEN.value, 1)
-            imgshow(f'Board contours: all', img_contours)
-        if verbose: print(f"Unfiltered contours: {len(contours)}")
-
-        # filter square polygon contours
-        MIN_CONTOUR_AREA = 100 # minimum contour area to be considered; filters noise contours
-        APPROX_EPS_COEFF = 0.05 # epsilon coefficient for cv2.approxPolyDP(); converts noisy cells into squares
-        square_contours = []
-        for contour in contours:
-            epsilon = APPROX_EPS_COEFF * cv2.arcLength(contour, True)
-            approx_poly = cv2.approxPolyDP(contour, epsilon, True)
-            if len(approx_poly) == 4 and cv2.contourArea(contour) > MIN_CONTOUR_AREA: square_contours.append(approx_poly)
-        contours = square_contours
-
-        # group similar-sized contours
-        contour_areas = [cv2.contourArea(contour) for contour in contours]
-        SIMILARITY_THRESH_PCT = 0.15 # percent difference to be considered a similar-sized contour
-        contours_in_group = [False] * len(contours)
-        similar_contours = []
-        for i, contour in enumerate(contours):
-            if contours_in_group[i]: continue
-            similar_group = [i]
-            for j, _ in enumerate(contours):
-                if i == j or contours_in_group[j]: continue
-                if pct_diff(contour_areas[i], contour_areas[j]) < SIMILARITY_THRESH_PCT:
-                    similar_group.append(j)
-                    contours_in_group[j] = True
-            similar_contours.append(similar_group)
-            contours_in_group[i] = True
-
-        # show similar contours
-        if verbose:
-            print(f"Filtered contours: {len(contours)}")
-            for i,group in enumerate(similar_contours):
-                print(f"Group {i} - size:{len(group)} area:{cv2.contourArea(contours[group[0]])}")
-        if show_imgs: 
-            for i,group in enumerate(similar_contours):
-                color = np.random.randint(128, 255, size=3).tolist()
-                img_contours = cv2.cvtColor(img_edges.copy(), cv2.COLOR_GRAY2BGR)
-                for c in group:
-                    cv2.drawContours(img_contours, contours, c, color, 5)
-                imgshow(f'Contours: groups ({i})', img_contours)
-
-        # find largest group of similar contours
-        cell_contours_idx = np.argmax([len(g) for g in similar_contours])
-        cell_contours = [contours[i] for i in similar_contours[cell_contours_idx]]
-        if verbose: print(f"Largest contour group idx:{cell_contours_idx}; size:{len(similar_contours[cell_contours_idx])}")
-
-        # find left, right, top, bottom bounds of the cell contours
-        cell_bboxes = [cv2.boundingRect(contour) for contour in cell_contours]
-        x_min = min([bbox[0] for bbox in cell_bboxes])
-        y_min = min([bbox[1] for bbox in cell_bboxes])
-        x_max = max([bbox[0] + bbox[2] for bbox in cell_bboxes])
-        y_max = max([bbox[1] + bbox[3] for bbox in cell_bboxes])
-
-        # calculate the number of cells in each row and column
-        cell_width, cell_height = cell_bboxes[0][2:4] # arbitrarily use bottom right box
-        grid_width = (x_max - x_min) // cell_width
-        grid_height = (y_max - y_min) // cell_height
-        # average unrounded grid width & height, then divide by 2 because mac screenshots are higher resolution
-        cell_size = ((x_max-x_min)/grid_width + (y_max-y_min)/grid_height)/2 / 2
-
-        return grid_width, grid_height, cell_size
 
     @staticmethod
     def crop_puzzle_img(img: np.ndarray, lrtb: LRTB, verbose=False, show_imgs=False) -> np.ndarray:
@@ -539,76 +536,16 @@ class FlowBot:
         if verbose: print(f"{color}: {path}")
         return path
 
-    def coord_to_dirs(self, grid_coords: List[Coord], verbose=False) -> List[str]:
-        '''Convert grid coordinates to directions (U,D,L,R) relative to the source.'''
-
-        directions = []
-        for i in range(len(grid_coords) - 1):
-            x1, y1 = grid_coords[i]
-            x2, y2 = grid_coords[i+1]
-            
-            for direction, dx, dy in self.puzzle.DIRECTIONS:
-                if (x1+dx, y1+dy) == (x2, y2):
-                    directions.append(direction)
-                    break
-        
-        if verbose: print(directions)
-        return directions
-    
-    def merge_dirs(self, start: Coord, directions: List[str], verbose=False) -> List[Coord]:
-        '''Merge a direction path into a minimal number of grid coordinates in the path.'''
-
-        if len(directions) > 1: directions.pop() # skip sink, it is automatically connected to the penultimate pipe
-        merged_dirs = []
-        curr_dir = directions[0]
-        steps = 1
-
-        for dir in directions[1:]:
-            if dir == curr_dir:
-                steps += 1
-            else:
-                merged_dirs.append((curr_dir, steps))
-                curr_dir = dir
-                steps = 1
-        merged_dirs.append((curr_dir, steps))
-
-        coordinates = [start]
-        x, y = start
-
-        for dir, steps in merged_dirs:
-            for dir_char, dx, dy in self.puzzle.DIRECTIONS:
-                if dir == dir_char:
-                    x += steps * dx
-                    y += steps * dy
-                    coordinates.append((x, y))
-                    break
-
-        if verbose: print(coordinates)
-        return coordinates
-    
-    
-    def merge_path_coords(self, path: List[Coord], verbose=False) -> List[Coord]:
+    def merge_path_coords(self, path: List[Coord], verbose=False) -> List[Vect2]:
         '''Merge a direction path into a minimal number of screen coordinates in the path.'''
         pf = Pathfinder(path, self.cell_size, pct_size=0.67)
         path_coords = pf.find_path()
-        path_coords = [p.inverted() for p in path_coords]
+        path_coords = [p.inverted() for p in path_coords] # change row,col -> x,y
         if verbose: print(path_coords)
         return path_coords
 
 
-    def draw_paths_cells(self, img: np.ndarray, paths: List[List[Coord]], img_copy=True) -> None:
-        if img_copy: img = img.copy()
-        for path in paths:
-            if not path: continue
-            r0,c0 = path[0]
-            x,y = self.cell_to_screen(r0,c0,rel_grid=True)
-            color = tuple(img[y,x].tolist())
-            for r1,c1 in path[1:]:
-                cv2.line(img, self.cell_to_screen(r0,c0,rel_grid=True), self.cell_to_screen(r1,c1,rel_grid=True), color, 5)
-                r0,c0 = r1,c1
-        imgshow('Path', img)
-
-    def draw_paths_coords(self, img: np.ndarray, paths: List[List[Point]], rel_board=True, img_copy=True) -> None:
+    def draw_paths_coords(self, img: np.ndarray, paths: List[List[Vect2]], rel_board=True, img_copy=True) -> None:
         if img_copy: img = img.copy()
         for path in paths:
             if not path: continue
@@ -616,35 +553,12 @@ class FlowBot:
             x0,y0 = path[0].unpack()
             for p1 in path[1:]:
                 x1,y1 = p1.unpack()
-                cv2.line(img, (x0,y0), (x1,y1), (255,255,255), 3)
-                cv2.circle(img, (x1,y1), 5, (128,128,128), 5)
+                cv2.line(img, (x0,y0), (x1,y1), Colors.WHITE.value, 3)
+                cv2.circle(img, (x1,y1), 5, Colors.GRAY.value, 5)
                 x0,y0 = x1,y1
         imgshow('Path', img)
 
-    def cell_to_screen(self, r: int | Coord, c: int = None, rel_grid=False) -> Coord:
-        '''Convert cell coordinate to screen coordinates.
-        If `rel_grid` is True, screen coordinates are relative to the top left of the grid,
-        otherwise they are relative to the top left of the screen.'''
-        if c is None: r,c = r # for single param inputs, assume it is a coord tuple
-        x = int(c * self.cell_size + self.cell_size/2)
-        y = int(r * self.cell_size + self.cell_size/2)
-        if not rel_grid:
-            x += self.window_bbox.x + self.margins.l
-            y += self.window_bbox.y + self.margins.t
-        return x,y
-    
-    def drag_cursor_cells(self, cells: List[Coord], duration=0, pause=False, verbose=False) -> None:
-        '''Drag the cursor along the given cells.'''
-
-        r0,c0 = cells[0]
-        pag.moveTo(self.cell_to_screen(r0,c0), duration=duration, _pause=pause)
-        if verbose: print(f"{cells[0]} | {self.cell_to_screen(r0,c0)}")
-
-        for r,c in cells[1:]:
-            pag.dragTo(self.cell_to_screen(r,c), button='left', duration=duration, _pause=pause)
-            if verbose: print(f" -> ({r}, {c}) | {self.cell_to_screen(r,c)}")
-
-    def drag_cursor_coords(self, coords: List[Point], rel_screen=False, duration=0, pause=False, verbose=False) -> None:
+    def drag_cursor_coords(self, coords: List[Vect2], rel_screen=False, duration=0, pause=False, verbose=False) -> None:
         '''Drag the cursor along the given coordinates.'''
 
         if not rel_screen: coords = [c + self.grid_tl for c in coords]
@@ -659,7 +573,8 @@ class FlowBot:
 
 
 if __name__ == '__main__':
-    bot = FlowBot(verbose=False, log_puzzles='puzzle_logs') # 'puzzle_logs'
+    PUZZLE_LOG_DIR = 'puzzle_logs'
+    # bot = FlowBot(verbose=False, log_puzzles=PUZZLE_LOG_DIR)
     # bot.solve_single(verbose=False, show_imgs=False, show_ts=True)
     # bot.solve_series(verbose=False, show_imgs=False, show_ts=True)
-    bot.solve_time_trial(duration=TTDuration._30SEC, verbose=False, show_ts=True)
+    # bot.solve_time_trial(duration=TTDuration._30SEC, verbose=False, show_ts=True)
