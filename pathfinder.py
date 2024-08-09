@@ -117,8 +117,11 @@ class Pathfinder:
 
 
 class VizPathfinder(Scene):
-    def construct(self, path: List[Vect2] = [(2,0),(1,0),(1,1),(1,2),(1,3)],
-                  rows: int = 5, cols: int = 5, cell_size: float = 50, pct_size: float = 0.8):
+    def construct(self,
+                  path: List[Vect2] = [(0,0),(1,0),(1,1),(2,1),(2,2),(3,2),(4,2),(4,3)],
+                  rows: int = 5, cols: int = 5,
+                  cell_size: float = 50,
+                  pct_size: float = 0.67):
         self.camera.frame_width, self.camera.frame_height = cols*cell_size, rows*cell_size
 
         pf = Pathfinder(path, cell_size, pct_size)
@@ -139,11 +142,27 @@ class VizPathfinder(Scene):
         for start, end in temp_lines:
             temp.add(Line(tlo(start), tlo(end), color=RED, stroke_width=100))
 
-        # path
+        grid_lines = VGroup()
+        for r in range(rows + 1): # horizontal
+            start = np.array([0, r * cell_size, 0])
+            end = np.array([cols * cell_size, r * cell_size, 0])
+            grid_lines.add(Line(tlo(start), tlo(end), color=DARK_GRAY, stroke_width=100, stroke_opacity=0.5))
+        for c in range(cols + 1): # vertical
+            start = np.array([c * cell_size, 0, 0])
+            end = np.array([c * cell_size, rows * cell_size, 0])
+            grid_lines.add(Line(tlo(start), tlo(end), color=DARK_GRAY, stroke_width=100, stroke_opacity=0.5))
+
+        # Highlight the first and last squares
+        start_square = Square(side_length=cell_size, fill_color=GREEN, fill_opacity=0.25)
+        end_square = Square(side_length=cell_size, fill_color=RED, fill_opacity=0.25)
+        start_square.move_to(tlo(np.array([path[0][0] * cell_size + half_cell, path[0][1] * cell_size + half_cell, 0])))
+        end_square.move_to(tlo(np.array([path[-1][0] * cell_size + half_cell, path[-1][1] * cell_size + half_cell, 0])))
+
+        # path line
         path_points = [np.array([x * cell_size + half_cell, y * cell_size + half_cell, 0]) for x, y in path]
         path_lines = VGroup()
-        for start, end in zip(path_points[:-1], path_points[1:]):
-            path_lines.add(Line(tlo(start), tlo(end), color=RED, stroke_width=100))
+        for start, end in zip(path_points[:-2], path_points[1:-1]):
+            path_lines.add(Line(tlo(start), tlo(end), color=WHITE, stroke_width=100))
 
         # soln
         soln_points = [np.array([x,y,0]) for x, y in soln]
@@ -157,20 +176,33 @@ class VizPathfinder(Scene):
             p0, p1 = outline_line
             x0,y0 = p0
             x1,y1 = p1
-            outline_lines.add(Line(tlo(np.array([x0, y0, 0])), tlo(np.array([x1, y1, 0])), color=GREEN, stroke_width=25))
+            outline_lines.add(Line(tlo(np.array([x0, y0, 0])), tlo(np.array([x1, y1, 0])), color=GRAY, stroke_width=50))
 
         # vertices
         vertex_dots = VGroup()
         for vertex in vertices:
+            if vertex in pf.S: clr = GREEN
+            elif vertex in pf.T: clr = RED
+            else: clr = BLUE
             x, y = vertex
-            vertex_dots.add(Dot(tlo(np.array([x, y, 0])), radius=1, color=BLUE))
+            vertex_dots.add(Dot(tlo(np.array([x, y, 0])), radius=1, color=clr))
+
+        # cell numbers
+        cell_labels = VGroup()
+        for i,p in enumerate(path_points):
+            label = Text(str(i), font_size=cell_size*20, stroke_width=5, fill_opacity=0.5, color=WHITE)
+            label.move_to(tlo(p - (half_cell/2, half_cell/2, 0)))
+            cell_labels.add(label)
 
         self.play(
             # Create(temp),
-            Create(path_lines),
+            Create(grid_lines),
+            Create(start_square),Create(end_square),
             Create(vertex_dots),
             Create(outline_lines),
-            Create(soln_lines)
+            Create(path_lines),
+            Create(soln_lines),
+            Create(cell_labels),
         )
         self.wait(2)
 
