@@ -142,6 +142,8 @@ class FlowBot:
             it += 1
             if verbose or show_ts: print_break(f"Iter {it}")
 
+            pag.click(1327, 77, button='left', duration=0, _pause=False)
+            last_paused = time.time()
             if it > 1: # screen capture only the board area
                 self.puzzle_img = FlowBot.screen_capture(puzzle_bbox, save_name=False)
                 ts_puzzle.add('Screenshot')
@@ -163,6 +165,8 @@ class FlowBot:
             path_coords = [None] + [self.merge_path_coords(p, verbose=verbose) for p in paths]
             ts_puzzle.add('Compute mouse path')
 
+            pag.click(1030, 420, button='left', duration=0, _pause=False)
+            duration += last_paused
             for color in self.puzzle.iter_colors():
                 clr_path = path_coords[color]
                 self.drag_cursor_coords(clr_path, duration=0, pause=False, verbose=verbose)
@@ -538,7 +542,7 @@ class FlowBot:
 
     def merge_path_coords(self, path: List[Coord], verbose=False) -> List[Vect2]:
         '''Merge a direction path into a minimal number of screen coordinates in the path.'''
-        pf = Pathfinder(path, self.cell_size, pct_size=0.67)
+        pf = Pathfinder(path, self.cell_size, pct_size=0.63)
         path_coords = pf.find_path()
         path_coords = [p.inverted() for p in path_coords] # change row,col -> x,y
         if verbose: print(path_coords)

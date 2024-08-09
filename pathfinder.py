@@ -30,57 +30,67 @@ class Pathfinder:
 
         e_radius = half_size * pct_size
         v_radius = half_size * (pct_size - 0.01)
-        d_radius = v_radius - e_radius
 
-        src_mid = path[0]*cell_size + half_cell
-        tgt_mid = path[-2]*cell_size + half_cell
-        for cell in path[1:-1]: # cell centers
-            V.add(cell*cell_size + half_cell)
+        N = 5
+        spacing = 2*v_radius / (N-1)
+        ds = [-1,-0.5,0,0.5,1]
+        dxs = [Vect2(x,0) for x in ds]
+        dys = [Vect2(0,y) for y in ds]
+        def get_cell_vertices25(cell: Vect2) -> List[Vect2]:
+            v = []
+            center = cell*cell_size + half_cell
+            for dy in dys:
+                for dx in dxs:
+                    v.append(center + dy*v_radius + dx*v_radius)
+            return v
+        
+        get_cell_method = get_cell_vertices25
 
         # source vertices/edges
         src_dir: Vect2 = path[1] - path[0]
         src_o1 = path[0]*cell_size + half_cell - src_dir*e_radius - src_dir.inverted()*e_radius
         src_o2 = path[0]*cell_size + half_cell - src_dir*e_radius + src_dir.inverted()*e_radius
-        src_i1 = path[0]*cell_size + half_cell + src_dir*e_radius - src_dir.inverted()*e_radius
-        src_i2 = path[0]*cell_size + half_cell + src_dir*e_radius + src_dir.inverted()*e_radius
-        S = [
-            src_o1 - src_dir*d_radius - src_dir.inverted()*d_radius,
-            src_o2 - src_dir*d_radius + src_dir.inverted()*d_radius,
-            src_i1 + src_dir*d_radius - src_dir.inverted()*d_radius,
-            src_i2 + src_dir*d_radius + src_dir.inverted()*d_radius,
-            src_mid
-        ]
+        S = get_cell_method(path[0])
         V.update(S)
         O.add((src_o1, src_o2)) # src cap
 
-        # intermediate vertices/edges
+        # intermediate edges
         prev1, prev2 = src_o1, src_o2
         for i, prev_dir, curr_dir in self.find_corners(path):
             curr: Vect2 = path[i]
+
             curr_i: Vect2 = curr*cell_size + half_cell - prev_dir*e_radius + curr_dir*e_radius # inner
             curr_o: Vect2 = curr*cell_size + half_cell + prev_dir*e_radius - curr_dir*e_radius # outer
-
             if curr_i.parallel_axis(prev1):   O.update([(prev1, curr_i), (prev2, curr_o)])
             elif curr_i.parallel_axis(prev2): O.update([(prev2, curr_i), (prev1, curr_o)])
             
             prev1, prev2 = curr_i, curr_o
-            V.update([
-                curr_i - prev_dir*d_radius + curr_dir*d_radius,
-                curr_o + prev_dir*d_radius - curr_dir*d_radius
-            ])
+
+        T = []
+        for i,(curr,prev) in enumerate(zip(path[1:], path[:-1])):
+            path_dir: Vect2 = curr - prev
+            vs = [curr*cell_size + half_cell - path_dir*half_size + path_dir.inverted()*v_radius*d for d in ds]
+            V.update(vs) # border cells
+            if i == len(path)-2:
+                T += vs
+                for j in range(-N//2,N+1):
+                    new_vs = [v + path_dir*spacing*j for v in vs]
+                    V.update(new_vs)
+                    T += new_vs
+                for j in range(-N,-N//2):
+                    new_vs = [v + path_dir*spacing*j for v in vs]
+                    V.update(new_vs)
+            elif i == len(path)-3:
+                pass
+            else:
+                for j in range(1,N+1):
+                    new_vs = [v + path_dir*spacing*j for v in vs]
+                    V.update(new_vs)
         
-        # target vertices/edges
+        # target edges
         tgt_dir: Vect2 = path[-2] - path[-1]
         tgt_o1 = path[-1]*cell_size + half_cell - tgt_dir*e_radius - tgt_dir.inverted()*e_radius
         tgt_o2 = path[-1]*cell_size + half_cell - tgt_dir*e_radius + tgt_dir.inverted()*e_radius
-        T = [
-            path[-2]*cell_size + half_cell - tgt_dir*v_radius - tgt_dir.inverted()*v_radius,
-            path[-2]*cell_size + half_cell - tgt_dir*v_radius + tgt_dir.inverted()*v_radius,
-            path[-2]*cell_size + half_cell - tgt_dir.inverted()*v_radius,
-            path[-2]*cell_size + half_cell + tgt_dir.inverted()*v_radius,
-            tgt_mid
-        ]
-        V.update(T)
 
         O.add((tgt_o1, tgt_o2)) # tgt cap
         if tgt_o1.parallel_axis(prev1):   O.update([(prev1, tgt_o1), (prev2, tgt_o2)])
@@ -117,14 +127,22 @@ class Pathfinder:
 
 
 class VizPathfinder(Scene):
-    def construct(self, path: List[Vect2] = [(2,0),(1,0),(1,1),(1,2),(1,3)],
-                  rows: int = 5, cols: int = 5, cell_size: float = 50, pct_size: float = 0.8):
+    def construct(self,
+                  path: List[Vect2] = [(0,0),(1,0),(1,1),(1,2),(1,3),(1,4)],
+                #   path: List[Vect2] = [(0,0),(1,0),(2,0),(3,0),(3,1),(3,2),(2,2),(1,2),(1,3),(0,3),(0,4)],
+                  rows: int = 6, cols: int = 6,
+                  cell_size: float = 50,
+                  pct_size: float = 0.67):
         self.camera.frame_width, self.camera.frame_height = cols*cell_size, rows*cell_size
 
         pf = Pathfinder(path, cell_size, pct_size)
         vertices = list(pf.V)
         outline = list(pf.O)
         soln = pf.find_path()
+        import timeit
+        time_taken = timeit.timeit(lambda: pf.find_path(), number=1)
+        soln = pf.find_path()
+        print(f"Time taken to find path: {time_taken:.6f} seconds")
         print(soln)
 
         half_cell = cell_size/2
@@ -139,11 +157,27 @@ class VizPathfinder(Scene):
         for start, end in temp_lines:
             temp.add(Line(tlo(start), tlo(end), color=RED, stroke_width=100))
 
-        # path
+        grid_lines = VGroup()
+        for r in range(rows + 1): # horizontal
+            start = np.array([0, r * cell_size, 0])
+            end = np.array([cols * cell_size, r * cell_size, 0])
+            grid_lines.add(Line(tlo(start), tlo(end), color=DARK_GRAY, stroke_width=100, stroke_opacity=0.5))
+        for c in range(cols + 1): # vertical
+            start = np.array([c * cell_size, 0, 0])
+            end = np.array([c * cell_size, rows * cell_size, 0])
+            grid_lines.add(Line(tlo(start), tlo(end), color=DARK_GRAY, stroke_width=100, stroke_opacity=0.5))
+
+        # Highlight the first and last squares
+        start_square = Square(side_length=cell_size, fill_color=GREEN, fill_opacity=0.25)
+        end_square = Square(side_length=cell_size, fill_color=RED, fill_opacity=0.25)
+        start_square.move_to(tlo(np.array([path[0][0] * cell_size + half_cell, path[0][1] * cell_size + half_cell, 0])))
+        end_square.move_to(tlo(np.array([path[-1][0] * cell_size + half_cell, path[-1][1] * cell_size + half_cell, 0])))
+
+        # path line
         path_points = [np.array([x * cell_size + half_cell, y * cell_size + half_cell, 0]) for x, y in path]
         path_lines = VGroup()
         for start, end in zip(path_points[:-1], path_points[1:]):
-            path_lines.add(Line(tlo(start), tlo(end), color=RED, stroke_width=100))
+            path_lines.add(Line(tlo(start), tlo(end), color=WHITE, stroke_width=100))
 
         # soln
         soln_points = [np.array([x,y,0]) for x, y in soln]
@@ -157,20 +191,25 @@ class VizPathfinder(Scene):
             p0, p1 = outline_line
             x0,y0 = p0
             x1,y1 = p1
-            outline_lines.add(Line(tlo(np.array([x0, y0, 0])), tlo(np.array([x1, y1, 0])), color=GREEN, stroke_width=25))
+            outline_lines.add(Line(tlo(np.array([x0, y0, 0])), tlo(np.array([x1, y1, 0])), color=GRAY, stroke_width=50))
 
         # vertices
         vertex_dots = VGroup()
         for vertex in vertices:
+            if vertex in pf.S: clr = GREEN
+            elif vertex in pf.T: clr = RED
+            else: clr = BLUE
             x, y = vertex
-            vertex_dots.add(Dot(tlo(np.array([x, y, 0])), radius=1, color=BLUE))
+            vertex_dots.add(Dot(tlo(np.array([x, y, 0])), radius=1, color=clr))
 
         self.play(
             # Create(temp),
+            Create(grid_lines),
+            Create(start_square),Create(end_square),
             Create(path_lines),
             Create(vertex_dots),
             Create(outline_lines),
-            Create(soln_lines)
+            Create(soln_lines),
         )
         self.wait(2)
 
