@@ -13,5 +13,3 @@ tests/scripts/*
 puzzle_processing/*
 
 puzzle_logs/*
-
-main.py
