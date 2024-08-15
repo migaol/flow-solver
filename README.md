@@ -7,15 +7,16 @@ Time Trials demonstration:
 
 Works on macOS only!
 
-How to use:
+# How to use:
 1. Download the code.
 2. `cd` to the root directory of this project.
 3. Run `pip install -r requirements.txt`.
 4. Configure the run settings in `main.py`.  See below for more information.
+5. Run `sudo python3 main.py`.  `sudo` is optional and the bot will still work without it, but you won't be able to use `esc` to quit.
 
 Move the mouse to the top left corner of the screen to trigger `pyautogui`'s failsafe, or press `esc` to exit the program while it is running.
 
-Run configurations:
+# Run configurations:
 - `PUZZLE_LOG_DIR` (boolean or string): If `False`, the bot will not log puzzles.  If you want to log puzzles, specify a directory instead.  The bot will save puzzle solutions including the path it used to this directory.
 - `VERBOSE` (boolean): Whether to print the technical outputs.
 - `SHOW_IMGS` (boolean): Whether to show stages of the puzzle processing as images.
