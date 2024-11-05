@@ -4,7 +4,7 @@ from mss import mss
 import cv2
 import numpy as np
 import pyautogui as pag
-import keyboard
+from pynput import keyboard
 from enum import Enum
 from typing import List, Tuple, Callable
 from flowsolver_sat import PuzzleRect
@@ -71,7 +71,8 @@ class FlowBot:
         self.window_bbox = FlowBot.get_window("Flow", verbose=verbose)
         if not self.window_bbox: sys.exit()
         self.monitor_w, self.monitor_h = FlowBot.get_monitor(verbose=verbose)
-        keyboard.hook(self._exit_on_keypress('esc'))
+        self.listener = keyboard.Listener(on_press=self._exit_on_keypress('esc'))
+        self.listener.start()
 
     def _exit_on_keypress(self, keyname: str) -> Callable:
         '''Exit the bot on the specified key press.  Log puzzles if necessary.'''
@@ -86,7 +87,9 @@ class FlowBot:
         '''Wait for a key press, then click (and pause for the puzzle to load).
         Should be used to position the mouse before starting.'''
         if move_to_window: pag.moveTo(*self.window_bbox.center(), duration=0, _pause=False)
-        keyboard.read_event()
+        with keyboard.Events() as events:
+            for event in events:
+                if event.key == keyboard.Key.space: break
         pag.click(duration=0, _pause=False)
         pag.sleep(puzzle_load_time.value)
 
